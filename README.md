@@ -4,11 +4,11 @@ Minimal, standalone project to connect to Binance (testnet/live), normalize even
 
 ## Quick Start
 
-- Python 3.11+
+- Python 3.12+
 - Create venv and install
 ```
 python -m venv .venv && source .venv/bin/activate
-pip install -e .[dev]
+pip install -e .
 ```
 
 - Configure credentials (choose one)

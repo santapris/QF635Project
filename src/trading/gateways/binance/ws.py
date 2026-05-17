@@ -9,24 +9,23 @@ import websockets
 
 @dataclass
 class BinanceWS:
-    public_base: str  # e.g., wss://fstream.binance.com
-    user_base: str    # e.g., wss://fstream.binance.com/ws
+    ws_base: str
 
     async def agg_trade(self, symbol: str) -> AsyncIterator[bytes]:
         """Yield raw frames from aggTrade stream."""
         stream = f"{symbol.lower()}@aggTrade"
-        url = f"{self.public_base}/ws/{stream}"
+        url = f"{self.ws_base}/ws/{stream}"
         async for msg in self._connect(url):
             yield msg
 
     async def depth5(self, symbol: str) -> AsyncIterator[bytes]:
         stream = f"{symbol.lower()}@depth5@100ms"
-        url = f"{self.public_base}/ws/{stream}"
+        url = f"{self.ws_base}/ws/{stream}"
         async for msg in self._connect(url):
             yield msg
 
     async def user_data(self, listen_key: str) -> AsyncIterator[bytes]:
-        url = f"{self.user_base}/{listen_key}"
+        url = f"{self.ws_base}/ws/{listen_key}"
         async for msg in self._connect(url):
             yield msg
 
@@ -50,11 +49,11 @@ class BinanceWS:
 
     async def read_one_agg_trade(self, symbol: str) -> bytes:
         stream = f"{symbol.lower()}@aggTrade"
-        url = f"{self.public_base}/ws/{stream}"
+        url = f"{self.ws_base}/ws/{stream}"
         return await self.read_one_public(url)
 
     async def read_one_user(self, listen_key: str) -> bytes:
-        url = f"{self.user_base}/{listen_key}"
+        url = f"{self.ws_base}/ws/{listen_key}"
         async with websockets.connect(url, ping_interval=15, ping_timeout=10) as ws:
             msg = await ws.recv()
             return msg

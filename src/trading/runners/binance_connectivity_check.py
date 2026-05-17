@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any
 
-from trading.config.settings import load_settings
+from trading.config import load_settings
 from trading.gateways.binance.rest import BinanceREST
 from trading.gateways.binance.ws import BinanceWS
 
@@ -29,7 +29,7 @@ async def main() -> None:
         })
 
     # Public WS check: aggTrade (one message then close cleanly)
-    ws = BinanceWS(settings.ws_public_base, settings.ws_user_base)
+    ws = BinanceWS(settings.ws_base)
     print("WS public: connecting to aggTrade (one-shot)...")
     raw = await ws.read_one_agg_trade(settings.symbol)
     msg = json.loads(raw)

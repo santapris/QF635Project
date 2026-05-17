@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any
 
-from trading.config.settings import load_settings
+from trading.config import load_settings
 from trading.event_bus.asyncio_bus import AsyncioBus
 from trading.gateways.binance.ws import BinanceWS
 from trading.feed_handler.normalizer import normalize_agg_trade, normalize_depth5
@@ -12,7 +12,7 @@ from trading.feed_handler.normalizer import normalize_agg_trade, normalize_depth
 
 async def main() -> None:
     settings = load_settings()
-    ws = BinanceWS(settings.ws_public_base, settings.ws_user_base)
+    ws = BinanceWS(settings.ws_base)
     bus = AsyncioBus()
 
     async def log_event(evt):
@@ -24,7 +24,7 @@ async def main() -> None:
         # Read a handful of trades then stop
         count = 0
         stream = f"{settings.symbol}@aggTrade"
-        url = f"{settings.ws_public_base}/ws/{stream}"
+        url = f"{settings.ws_base}/public/ws/{stream}"
         async with (await __import__("websockets").connect(url)) as sock:  # type: ignore
             while count < 5:
                 raw = await sock.recv()
@@ -36,7 +36,7 @@ async def main() -> None:
     async def pump_depth5():
         # Read one snapshot
         stream = f"{settings.symbol}@depth5@100ms"
-        url = f"{settings.ws_public_base}/ws/{stream}"
+        url = f"{settings.ws_base}/public/ws/{stream}"
         async with (await __import__("websockets").connect(url)) as sock:  # type: ignore
             raw = await sock.recv()
             msg = json.loads(raw)
