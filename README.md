@@ -18,12 +18,12 @@ pip install -e .
 
 - Test connectivity
 ```
-BINANCE_TESTNET=true BINANCE_SYMBOL=btcusdt python -m trading.runners.binance_connectivity_check
+python -m trading.runners.binance_connectivity_check
 ```
 
 - Stream normalized events to in-process bus and log
 ```
-BINANCE_TESTNET=true BINANCE_SYMBOL=btcusdt python -m trading.runners.binance_feed_to_bus
+python -m trading.runners.binance_feed_to_bus
 ```
 
 ## Notes
