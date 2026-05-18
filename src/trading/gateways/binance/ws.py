@@ -4,7 +4,10 @@ import asyncio
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
+import structlog
 import websockets
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass
@@ -38,6 +41,7 @@ class BinanceWS:
                     async for message in ws:
                         yield message
             except Exception:
+                log.warning("ws_reconnecting", url=url, backoff=backoff, exc_info=True)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60.0)
 

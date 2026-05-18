@@ -8,3 +8,5 @@ class BaseSettings(PydanticBaseSettings):
 
     api_key: str | None = None
     api_secret: str | None = None
+
+    log_level: str = "INFO"

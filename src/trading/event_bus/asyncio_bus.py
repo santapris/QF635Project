@@ -4,7 +4,11 @@ import asyncio
 from collections import defaultdict
 from typing import Awaitable, Callable, Dict, List
 
+import structlog
+
 from trading.core.events import BaseEvent
+
+log = structlog.get_logger(__name__)
 
 
 Handler = Callable[[BaseEvent], Awaitable[None]]
@@ -39,8 +43,7 @@ class AsyncioBus:
                 try:
                     await h(evt)
                 except Exception:
-                    # In MVP, swallow to keep bus alive. Real impl should log/alert.
-                    pass
+                    log.exception("bus_handler_error", topic=topic, handler=h.__qualname__)
 
     async def flush(self) -> None:
         # Cooperatively yield; no strict guarantee but helpful in tests
