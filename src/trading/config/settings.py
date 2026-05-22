@@ -55,47 +55,6 @@ def _maybe_load_from_vault() -> tuple[str | None, str | None]:
     return api_key, api_secret
 
 
-def _maybe_load_from_qf_repo() -> tuple[str | None, str | None]:
-    """Opt-in dev helper: scan QF635 classes for demo API keys/secrets.
-
-    This is for local validation only. Controlled by DEV_LOAD_QF_KEYS=true.
-    """
-    import pathlib, re
-
-    try:
-        # Find repo root by walking up until we see a 'Modules' dir
-        here = pathlib.Path(__file__).resolve()
-        root = here
-        for _ in range(8):  # walk up a few levels
-            if (root / "Modules").exists():
-                break
-            root = root.parent
-        base = root / "Modules" / "Microstructure & QTS" / "QF635-2026a" / "classes"
-        if not base.exists():
-            return None, None
-        api_key = None
-        api_secret = None
-        key_re = re.compile(r"API_KEY\s*=\s*['\"]([^'\"]+)['\"]")
-        sec_re = re.compile(r"api_secret\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
-        for path in base.rglob("*.py"):
-            try:
-                text = path.read_text(errors="ignore")
-            except Exception:
-                continue
-            if api_key is None:
-                m = key_re.search(text)
-                if m:
-                    api_key = m.group(1)
-            if api_secret is None:
-                m = sec_re.search(text)
-                if m:
-                    api_secret = m.group(1)
-            if api_key and api_secret:
-                break
-        return api_key, api_secret
-    except Exception:
-        return None, None
-
 
 def load_settings() -> Settings:
     """Load settings from environment variables.
@@ -116,12 +75,6 @@ def load_settings() -> Settings:
         vk, vs = _maybe_load_from_vault()
         api_key = api_key or vk
         api_secret = api_secret or vs
-
-    # Optional dev-only loader (off by default)
-    if _as_bool(os.getenv("DEV_LOAD_QF_KEYS"), False) and (not api_key or not api_secret):
-        dk, ds = _maybe_load_from_qf_repo()
-        api_key = api_key or dk
-        api_secret = api_secret or ds
 
     if market != "futures":
         # Keep scope tight for MVP; spot can be added later.

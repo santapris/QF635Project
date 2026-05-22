@@ -129,16 +129,13 @@ class BalanceReconciler:
         # Aggregate our positions by base-currency asset.
         # We sum across all strategies — the venue doesn't know about
         # the strategy attribution.
+        all_books = self._position_engine.get_all_books()
         ours_by_asset: dict[str, Decimal] = {}
         for inst in self._tracked:
-            # Sum across strategies for this instrument.
-            qty_sum = Decimal(0)
-            book_keys = [
-                k for k in self._position_engine._books.keys()  # type: ignore[attr-defined]
-                if k[1] == inst.instrument_id
-            ]
-            for k in book_keys:
-                qty_sum += self._position_engine._books[k].quantity  # type: ignore[attr-defined]
+            qty_sum = sum(
+                (book.quantity for k, book in all_books.items() if k[1] == inst.instrument_id),
+                Decimal(0),
+            )
             asset = inst.base_currency
             ours_by_asset[asset] = ours_by_asset.get(asset, Decimal(0)) + qty_sum
 

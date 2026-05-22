@@ -192,7 +192,7 @@ class OMSEngine:
                 except Exception:
                     _log.exception("algo.on_fill raised; ignoring")
                 # If parent is finished (algo done + no leaves), tidy up.
-                if algo.is_done() and self._parent_has_leaves(order.parent_order_id) == 0:
+                if algo.is_done() and self._parent_has_leaves(order.parent_order_id) == Decimal(0):
                     self._algos.pop(order.parent_order_id, None)
                     self._parents.pop(order.parent_order_id, None)
 
@@ -357,13 +357,13 @@ class OMSEngine:
         for eid in stale_keys:
             self._signal_cache.pop(eid, None)
 
-    def _parent_has_leaves(self, parent_id: OrderId) -> int:
-        """Count of open quantity across children. Used to decide algo cleanup."""
+    def _parent_has_leaves(self, parent_id: OrderId) -> Decimal:
+        """Sum of open leaves_quantity across children. Used to decide algo cleanup."""
         total = Decimal(0)
         for order in self._orders.values():
             if order.parent_order_id == parent_id and not order.is_terminal:
                 total += order.leaves_quantity
-        return int(total)
+        return total
 
 
 __all__ = ["OMSEngine"]

@@ -177,6 +177,10 @@ class PositionEngine:
 
     # --- Read API (used by PortfolioView adapter, dashboards) ------------
 
+    def get_all_books(self) -> dict[tuple[StrategyId, str], AccountingBook]:
+        """Shallow copy of all position books, keyed by (strategy_id, instrument_id)."""
+        return dict(self._books)
+
     def get_book(
         self, strategy_id: StrategyId, instrument: Instrument
     ) -> AccountingBook | None:
