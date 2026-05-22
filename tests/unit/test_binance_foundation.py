@@ -193,6 +193,22 @@ def test_config_live_url_when_testnet_false():
     assert "testnet" not in cfg.rest_base_url
     assert cfg.rest_base_url == "https://api.binance.com"
 
+def test_config_futures_testnet_urls():
+    cfg = BinanceConfig(testnet=True, futures=True)
+    assert cfg.rest_base_url == "https://demo-fapi.binance.com"
+    assert cfg.ws_base_url == "wss://fstream.binancefuture.com"
+
+def test_config_futures_api_prefix():
+    cfg = BinanceConfig(testnet=True, futures=True)
+    assert cfg.api_prefix == "/fapi/v1"
+
+def test_config_futures_listen_key_path():
+    cfg = BinanceConfig(testnet=True, futures=True)
+    assert cfg.listen_key_path == "/fapi/v1/listenKey"
+
+def test_config_futures_account_info_path():
+    cfg = BinanceConfig(testnet=True, futures=True)
+    assert cfg.account_path == "/fapi/v2/account"
 
 # =====================================================================
 # REST client — mocked HTTP
