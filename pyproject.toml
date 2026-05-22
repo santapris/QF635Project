@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading"
+version = "0.1.0"
+description = "Algorithmic trading platform with event-driven architecture"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Trading Platform" }]
+dependencies = [
+    "pydantic>=2.0,<3",
+]
+
+[project.optional-dependencies]
+# aiokafka is only needed for the Kafka bus backend; we keep it optional
+# so the platform installs and runs without it.
+kafka = ["aiokafka>=0.11"]
+# The Binance Spot adapter needs aiohttp (REST) and websockets (streams).
+binance = [
+    "aiohttp>=3.9",
+    "websockets>=12",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "aiohttp>=3.9",
+    "websockets>=12",
+]
+
+[project.scripts]
+trading-backtest = "trading.runners.run_backtest:main"
+trading-live = "trading.runners.run_live:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+trading = ["py.typed"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+markers = ["integration: end-to-end tests across modules"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",  # line length: enforced softly by line-length, hard rule too noisy
+    "B008",  # do not perform function calls in argument defaults — Pydantic uses this
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B", "SIM"]  # tests get more leeway
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_return_any = true
+# Pydantic 2 plugin for proper model inference
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "aiokafka.*"
+ignore_missing_imports = true

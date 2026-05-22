@@ -1,0 +1,64 @@
+# Example paper-trading config: market-making strategy on the simulation gateway.
+# Run with:
+#   python -m trading.runners.run_live --config configs/paper_example.toml
+#
+# Without a feed handler wired in, this won't see ticks — useful as a config
+# example only. Feed-handler wiring lives in feed_handler/, and to use it you
+# would add a [[feed_handlers]] section here and a builder hook (deferred).
+
+[[instruments]]
+symbol = "BTC-USDT"
+exchange = "SIM"
+asset_type = "SPOT"
+base_currency = "BTC"
+quote_currency = "USDT"
+tick_size = "0.01"
+lot_size = "0.0001"
+
+[bus]
+backend = "asyncio"
+queue_size = 10000
+
+[oms]
+signal_ttl_seconds = 300.0
+
+[position]
+method = "WAVG"
+mark_to_market_interval_seconds = 5.0
+
+[[strategies]]
+strategy_id = "mm-1"
+type = "market_making"
+instruments = ["SIM:BTC-USDT"]
+[strategies.parameters]
+quote_size = "0.01"
+target_spread_bps = "10"
+max_position = "0.5"
+inventory_skew_bps = "5"
+
+[[risk.global_rules]]
+type = "instrument_allowlist"
+[risk.global_rules.params]
+allowed_instrument_ids = "SIM:BTC-USDT"
+
+[[risk.per_strategy."mm-1"]]
+type = "max_position"
+[risk.per_strategy."mm-1".params]
+max_long = "0.5"
+max_short = "0.5"
+
+[[risk.per_strategy."mm-1"]]
+type = "throttle"
+[risk.per_strategy."mm-1".params]
+max_signals = "100"
+window_seconds = "60"
+
+[[gateways]]
+venue = "SIM"
+type = "simulation"
+maker_bps = 1.0
+taker_bps = 5.0
+submit_ack_ms = 5.0
+cancel_ack_ms = 5.0
+fill_ms = 10.0
+seed = 1

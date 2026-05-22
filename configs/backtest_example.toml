@@ -1,0 +1,73 @@
+# Example backtest config: momentum strategy on a tiny synthetic dataset.
+# Run with:
+#   python -m trading.runners.run_backtest --config configs/backtest_example.toml
+
+[[instruments]]
+symbol = "BTC-USDT"
+exchange = "SIM"
+asset_type = "SPOT"
+base_currency = "BTC"
+quote_currency = "USDT"
+tick_size = "0.01"
+lot_size = "0.0001"
+
+[bus]
+backend = "asyncio"
+queue_size = 10000
+
+[oms]
+signal_ttl_seconds = 300.0
+
+[position]
+method = "WAVG"
+mark_to_market_interval_seconds = 5.0
+
+[[strategies]]
+strategy_id = "momentum-1"
+type = "momentum"
+instruments = ["SIM:BTC-USDT"]
+enabled = true
+[strategies.parameters]
+fast_period = "5"
+slow_period = "15"
+target_quantity = "0.1"
+
+# Risk: cap absolute position, throttle to a sane rate, stop on a big drawdown.
+[[risk.global_rules]]
+type = "instrument_allowlist"
+[risk.global_rules.params]
+allowed_instrument_ids = "SIM:BTC-USDT"
+
+[[risk.per_strategy."momentum-1"]]
+type = "max_position"
+[risk.per_strategy."momentum-1".params]
+max_long = "1.0"
+max_short = "1.0"
+
+[[risk.per_strategy."momentum-1"]]
+type = "max_order_size"
+[risk.per_strategy."momentum-1".params]
+max_quantity = "0.5"
+
+[[risk.per_strategy."momentum-1"]]
+type = "daily_loss_limit"
+[risk.per_strategy."momentum-1".params]
+max_loss = "5000"
+
+[[gateways]]
+venue = "SIM"
+type = "backtest"
+maker_bps = 1.0
+taker_bps = 5.0
+submit_ack_ms = 1.0
+cancel_ack_ms = 1.0
+fill_ms = 1.0
+seed = 42
+
+[backtest]
+data_path = "configs/sample_data.csv"
+instrument_id = "SIM:BTC-USDT"
+snapshot_interval_seconds = 30.0
+initial_equity = 100000.0
+periods_per_year = 525600   # 1-minute bars in 24/7 markets
+timestamp_unit = "ms"
