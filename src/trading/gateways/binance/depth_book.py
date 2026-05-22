@@ -4,7 +4,7 @@ Maintaining a *correct* L2 book from Binance's depth stream requires a
 specific sequence:
 
 1. Open the WS depth diff stream and buffer events.
-2. Fetch a REST snapshot from ``/api/v3/depth`` (with sufficient
+2. Fetch a REST snapshot from ``{api_prefix}/depth`` (with sufficient
    ``limit`` — typically 1000).
 3. Drop any buffered events with ``u <= lastUpdateId``.
 4. The first event you apply MUST satisfy
@@ -29,6 +29,8 @@ import logging
 from collections import deque
 from decimal import Decimal
 from typing import Final
+
+from trading.gateways.binance.config import BinanceConfig
 
 from ...core.events import OrderBookEvent, TickEvent
 from ...core.exceptions import SequenceGapError
@@ -64,10 +66,12 @@ class DepthBookManager:
         rest: BinanceRESTClient,
         symbols: SymbolMapper,
         instrument: Instrument,
+        config: BinanceConfig | None = None,
     ) -> None:
         self._rest = rest
         self._symbols = symbols
         self._instrument = instrument
+        self._config = config = config or getattr(rest, "_config", None) or BinanceConfig()
         self._book = L2OrderBook(instrument)
         # Buffer used while we're fetching the snapshot.
         self._pre_snapshot_buffer: deque[dict] = deque()
@@ -103,7 +107,7 @@ class DepthBookManager:
         self._snapshot_pending = True
         wire = self._symbols.wire_symbol(self._instrument)
         snapshot = await self._rest.request(
-            "GET", "/api/v3/depth",
+            "GET", (self._config.api_prefix + "/depth" if self._config.futures else self._config.api_prefix + "/depth"),
             params={"symbol": wire, "limit": _SNAPSHOT_LIMIT},
             weight=_W_DEPTH_SNAPSHOT_1000,
         )

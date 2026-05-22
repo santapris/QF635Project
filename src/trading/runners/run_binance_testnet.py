@@ -75,7 +75,7 @@ def _build_instruments() -> list[Instrument]:
         Instrument(
             symbol="BTC-USDT",
             exchange="BINANCE",
-            asset_type=AssetType.SPOT,
+            asset_type=AssetType.FUTURES,
             base_currency="BTC",
             quote_currency="USDT",
             tick_size=Decimal("0.01"),
@@ -93,7 +93,7 @@ async def _amain(args: argparse.Namespace) -> int:
     log = logging.getLogger("binance.testnet")
 
     # --- Config and creds ---------------------------------------------
-    config = BinanceConfig(testnet=True)
+    config = BinanceConfig(testnet=True, futures=True)
     credentials = BinanceCredentials.from_env(testnet=True)
 
     instruments = _build_instruments()

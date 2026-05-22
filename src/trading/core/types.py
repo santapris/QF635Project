@@ -136,7 +136,7 @@ class Severity(str, Enum):
 class AssetType(str, Enum):
     SPOT = "SPOT"
     PERPETUAL = "PERPETUAL"
-    FUTURE = "FUTURE"
+    FUTURES = "FUTURES"
     OPTION = "OPTION"
     EQUITY = "EQUITY"
     FX = "FX"

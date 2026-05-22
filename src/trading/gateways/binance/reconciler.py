@@ -1,6 +1,6 @@
 """Balance reconciliation.
 
-Periodically polls ``/api/v3/account`` and compares the reported
+Periodically polls ``{api_prefix}/account`` and compares the reported
 balances against what our :class:`PositionEngine` thinks we hold. Any
 divergence above ``mismatch_threshold`` raises an alert.
 
@@ -39,7 +39,7 @@ from .rest_client import BinanceRESTClient
 
 _log = logging.getLogger(__name__)
 
-_W_ACCOUNT: Final[float] = 10.0  # Binance weight for /api/v3/account
+_W_ACCOUNT: Final[float] = 10.0  # Binance weight for account info endpoint. Not in official docs but observed empirically. We set it higher than the observed 5 to be safe; if we get throttled we want to back off more aggressively. If Binance changes this, we'll get a 429 and can adjust accordingly.
 
 
 class BalanceReconciler:
@@ -114,14 +114,15 @@ class BalanceReconciler:
         Public so an operator script can call it on demand.
         """
         account = await self._rest.request(
-            "GET", "/api/v3/account",
+            "GET", self._config.account_path,
             signed=True, weight=_W_ACCOUNT,
         )
-        balances_raw = account.get("balances", [])
+        # Spot - balances
+        balances_raw = account.get("balances", []) or account.get("assets", []) or []
         venue_balances: dict[str, Decimal] = {}
         for b in balances_raw:
             asset = b["asset"]
-            free = Decimal(str(b.get("free", "0")))
+            free = Decimal(str(b.get("free", "0") or b.get("walletBalance", "0")))
             locked = Decimal(str(b.get("locked", "0")))
             if free + locked > 0:
                 venue_balances[asset] = free + locked

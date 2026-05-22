@@ -73,7 +73,7 @@ _log = logging.getLogger(__name__)
 # get throttled prematurely or overrun the venue's limit.
 _W_NEW_ORDER = 1
 _W_CANCEL_ORDER = 1
-_W_OPEN_ORDERS = 6  # /api/v3/openOrders for one symbol
+_W_OPEN_ORDERS = 6 
 
 
 class BinanceGateway(AbstractGateway):
@@ -148,7 +148,7 @@ class BinanceGateway(AbstractGateway):
 
         try:
             resp = await self._rest.request(
-                "POST", "/api/v3/order",
+                "POST", self._config.api_prefix + "/order",
                 params=params, signed=True, weight=_W_NEW_ORDER,
             )
         except OrderError as exc:
@@ -223,7 +223,7 @@ class BinanceGateway(AbstractGateway):
         }
         try:
             await self._rest.request(
-                "DELETE", "/api/v3/order",
+                "DELETE", self._config.api_prefix + "/order",
                 params=params, signed=True, weight=_W_CANCEL_ORDER,
             )
         except OrderError as exc:
@@ -333,7 +333,7 @@ class BinanceGateway(AbstractGateway):
         for wire_sym in self._symbols.all_wire_symbols():
             try:
                 orders = await self._rest.request(
-                    "GET", "/api/v3/openOrders",
+                    "GET", self._config.api_prefix + "/openOrders",
                     params={"symbol": wire_sym},
                     signed=True, weight=_W_OPEN_ORDERS,
                 )
@@ -347,7 +347,7 @@ class BinanceGateway(AbstractGateway):
                 order_id = order.get("orderId")
                 try:
                     await self._rest.request(
-                        "DELETE", "/api/v3/order",
+                        "DELETE", self._config.api_prefix + "/order",
                         params={"symbol": wire_sym, "orderId": order_id},
                         signed=True, weight=_W_CANCEL_ORDER,
                     )

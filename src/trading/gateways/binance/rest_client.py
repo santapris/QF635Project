@@ -124,7 +124,7 @@ class BinanceRESTClient:
         fail loud rather than send signed requests that will all be rejected.
         """
         before_ms = int(time.time() * 1000)
-        data = await self._raw_get("/api/v3/time")
+        data = await self._raw_get(self._config.api_prefix + "/time")
         after_ms = int(time.time() * 1000)
         local_mid = (before_ms + after_ms) // 2
         server_ms = int(data["serverTime"])

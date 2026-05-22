@@ -3,8 +3,8 @@
 A listen key is the credential for the private user-data WebSocket. The
 lifecycle is rigid:
 
-1. ``POST /api/v3/userDataStream`` to obtain a key.
-2. ``PUT /api/v3/userDataStream?listenKey=...`` every <60 minutes to
+1. ``POST {api_prefix}/v1/ListenKey`` to obtain a key.
+2. ``PUT {api_prefix}/v1/ListenKey`` every <60 minutes to
    refresh; we use 30 min for safety margin.
 3. Key expires silently if not refreshed. After expiry the WebSocket
    keeps the TCP connection open but stops delivering messages.
@@ -28,9 +28,6 @@ from .config import BinanceConfig
 from .rest_client import BinanceRESTClient
 
 _log = logging.getLogger(__name__)
-
-
-_LISTEN_KEY_PATH: Final[str] = "/api/v3/userDataStream"
 
 
 class ListenKeyManager:
@@ -100,7 +97,7 @@ class ListenKeyManager:
     async def _obtain_key(self) -> str:
         """POST a new listen key. Returns the key string."""
         resp = await self._rest.request(
-            "POST", _LISTEN_KEY_PATH,
+            "POST", self._config.listen_key_path,
             user_data=True,  # POST is USER_DATA, not SIGNED — just needs the API key header
             weight=1,
         )
@@ -111,7 +108,7 @@ class ListenKeyManager:
     async def _keepalive(self, key: str) -> None:
         """PUT refresh. Raises if Binance reports the key as invalid."""
         await self._rest.request(
-            "PUT", _LISTEN_KEY_PATH,
+            "PUT", self._config.listen_key_path,
             params={"listenKey": key},
             user_data=True,
             weight=1,

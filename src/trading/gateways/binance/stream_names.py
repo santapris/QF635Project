@@ -31,7 +31,7 @@ def depth_diff(symbol: str, *, update_speed_ms: int = 100) -> str:
     ``update_speed_ms`` is either 100 or 1000. 100 ms is finer but bursty.
 
     To maintain a correct local order book you must combine this stream
-    with a REST snapshot from ``/api/v3/depth`` and apply the documented
+    with a REST snapshot from ``{api_prefix}/depth`` and apply the documented
     interleave rule — see :class:`DepthBookManager` (batch 4).
     """
     if update_speed_ms == 100:

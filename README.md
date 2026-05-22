@@ -5,8 +5,6 @@ paper trading, and (with real gateway adapters added) live trading.
 
 ## Status
 
-Production-shaped foundation:
-
 - Core domain model (Decimal money, NewType IDs, frozen Pydantic events)
 - Event bus (in-memory, asyncio, Kafka)
 - Feed handler with order book reconstruction and reconnect logic
@@ -48,10 +46,24 @@ make test
 make backtest     # runs configs/backtest_example.toml
 ```
 
+```bash
+python 3.11 -m venv .venv && source .venv/bin/activate (.venv/Scripts/activate if Windows)
+python -m pip install -U pip wheel
+python -m pip install uv 
+uv pip install -e ".[binance]"
+```
+
 To run paper trading against the simulation gateway:
 
 ```bash
 make run-paper    # Ctrl-C to stop
+```
+
+To run and validate binance_testnet
+```bash
+export BINANCE_TESTNET_API_KEY= ""
+export BINANCE_TESTNET_API_SECRET=""
+python -m trading.runners.run_binance_testnet --log-level DEBUG/INFO
 ```
 
 ## Architecture

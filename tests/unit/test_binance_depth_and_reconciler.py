@@ -58,7 +58,7 @@ def mapper(btc, eth) -> SymbolMapper:
 
 
 class _FakeREST:
-    """Records calls; returns canned responses for /api/v3/depth and /account."""
+    """Records calls; returns canned responses for {api_prefix}/depth and {api_prefix}/account."""
 
     def __init__(self):
         self.calls: list[tuple[str, str, dict | None]] = []

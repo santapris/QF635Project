@@ -31,6 +31,12 @@ SPOT_TESTNET_REST: Final[str] = "https://testnet.binance.vision"
 SPOT_TESTNET_WS: Final[str] = "wss://testnet.binance.vision"
 
 
+# FUTURES Endpoints
+FUTURES_LIVE_REST: Final[str] = "https://fapi.binance.com"
+FUTURES_LIVE_WS: Final[str] = "wss://fstream.binance.com/private"
+FUTURES_TESTNET_REST: Final[str] = "https://demo-fapi.binance.com"
+FUTURES_TESTNET_WS: Final[str] = "wss://fstream.binancefuture.com"
+
 # Env var names. The pair differs by environment so live credentials cannot
 # accidentally be sent to testnet or vice versa.
 ENV_LIVE_KEY: Final[str] = "BINANCE_API_KEY"
@@ -63,6 +69,9 @@ class BinanceCredentials:
 class BinanceConfig:
     """Adapter configuration."""
 
+    futures: bool = False
+    """If True, use Futures endpoints and credentials instead of Spot."""
+
     testnet: bool = True
     """If True, use Spot testnet URLs and BINANCE_TESTNET_* env vars."""
 
@@ -86,12 +95,29 @@ class BinanceConfig:
     """How often the balance reconciler polls /api/v3/account."""
 
     @property
+    def api_prefix(self) -> str:
+        return "/fapi/v1" if self.futures else "/api/v3"
+    
+    @property
+    def account_path(self) -> str:
+        return "/fapi/v2/account" if self.futures else "/api/v3/account"
+    
+    @property
+    def listen_key_path(self) -> str:
+        return "/fapi/v1/listenKey" if self.futures else "/api/v3/userDataStream"
+
+    @property
     def rest_base_url(self) -> str:
+        if self.futures:
+            return FUTURES_TESTNET_REST if self.testnet else FUTURES_LIVE_REST
         return SPOT_TESTNET_REST if self.testnet else SPOT_LIVE_REST
 
     @property
     def ws_base_url(self) -> str:
+        if self.futures:
+            return FUTURES_TESTNET_WS if self.testnet else FUTURES_LIVE_WS
         return SPOT_TESTNET_WS if self.testnet else SPOT_LIVE_WS
+    
 
 
 __all__ = [
