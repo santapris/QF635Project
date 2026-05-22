@@ -32,6 +32,7 @@ from decimal import Decimal
 
 from ..core.clock import Clock
 from ..core.events import BaseEvent, FillEvent, TickEvent
+from ..core.exceptions import BackpressureError
 from ..core.instruments import Instrument
 from ..core.positions import Position
 from ..core.types import Price, StrategyId
@@ -71,6 +72,7 @@ class PositionEngine:
         # instrument_id -> last seen mark (mid) price
         self._marks: dict[str, Price] = {}
         self._started = False
+        self._dropped_events: int = 0
 
     # --- Lifecycle --------------------------------------------------------
 
@@ -165,7 +167,7 @@ class PositionEngine:
                 mark = Price(Decimal(0))
             items.append((book, mark))
         aggregate = aggregate_portfolio(items)
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.POSITIONS,
             make_pnl_snapshot_event(
                 aggregate=aggregate,
@@ -228,6 +230,20 @@ class PositionEngine:
 
     # --- Helpers ---------------------------------------------------------
 
+    async def _safe_publish(self, topic: str, event: BaseEvent) -> bool:
+        """Publish to the bus; absorb BackpressureError and return False if dropped."""
+        try:
+            await self._bus.publish(topic, event)
+            return True
+        except BackpressureError as exc:
+            self._dropped_events += 1
+            _log.error(
+                "bus backpressure; position event dropped [total_drops=%d] "
+                "topic=%r event_type=%r: %s",
+                self._dropped_events, topic, type(event).__name__, exc,
+            )
+            return False
+
     async def _publish_position_update(
         self,
         strategy_id: StrategyId,
@@ -235,7 +251,7 @@ class PositionEngine:
         book: AccountingBook,
         mark: Price,
     ) -> None:
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.POSITIONS,
             make_position_update_event(
                 strategy_id=strategy_id,

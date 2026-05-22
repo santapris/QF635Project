@@ -48,7 +48,7 @@ from ..core.events import (
     SignalEvent,
     TickEvent,
 )
-from ..core.exceptions import InvalidStateTransitionError, OrderNotFoundError
+from ..core.exceptions import BackpressureError, InvalidStateTransitionError, OrderNotFoundError
 from ..core.types import (
     ClientOrderId,
     OrderId,
@@ -97,6 +97,7 @@ class OMSEngine:
         self._parents: dict[OrderId, SignalEvent] = {}
 
         self._started = False
+        self._dropped_events: int = 0
 
     # --- Lifecycle --------------------------------------------------------
 
@@ -299,7 +300,15 @@ class OMSEngine:
             price=spec.price,
             time_in_force=spec.time_in_force,
         )
-        await self._bus.publish(Topic.ORDERS, req)
+        if not await self._safe_publish(Topic.ORDERS, req):
+            # The gateway never received this order. Mark it rejected so the
+            # state machine stays consistent and algo cleanup fires correctly.
+            order.transition_to(OrderStatus.REJECTED, at_ns=self._clock.now_ns())
+            order.reject_reason = "dropped: bus backpressure on orders topic"
+            algo = self._algos.pop(parent_id, None)
+            self._parents.pop(parent_id, None)
+            if algo is not None:
+                algo.cancel()
 
     # --- Cancel API (caller-driven) --------------------------------------
 
@@ -314,7 +323,7 @@ class OMSEngine:
             order.transition_to(OrderStatus.PENDING_CANCEL, at_ns=self._clock.now_ns())
         except InvalidStateTransitionError:
             return
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.ORDERS,
             CancelRequest(
                 ts_event=self._clock.now_ns(),
@@ -345,6 +354,20 @@ class OMSEngine:
         return (o for o in self._orders.values() if not o.is_terminal)
 
     # --- Helpers ---------------------------------------------------------
+
+    async def _safe_publish(self, topic: str, event: BaseEvent) -> bool:
+        """Publish to the bus; absorb BackpressureError and return False if dropped."""
+        try:
+            await self._bus.publish(topic, event)
+            return True
+        except BackpressureError as exc:
+            self._dropped_events += 1
+            _log.critical(
+                "bus backpressure; OMS event dropped [total_drops=%d] "
+                "topic=%r event_type=%r: %s",
+                self._dropped_events, topic, type(event).__name__, exc,
+            )
+            return False
 
     def _evict_stale_signals(self) -> None:
         cutoff = self._clock.now_ns() - self._signal_ttl_ns

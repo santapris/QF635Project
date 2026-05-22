@@ -46,7 +46,7 @@ from ...core.events import (
     OrderRejected,
     OrderRequest,
 )
-from ...core.exceptions import GatewayError, OrderError
+from ...core.exceptions import BackpressureError, GatewayError, OrderError
 from ...core.types import (
     ClientOrderId,
     ExchangeOrderId,
@@ -103,6 +103,7 @@ class BinanceGateway(AbstractGateway):
         self._exchange_ids: dict[OrderId, ExchangeOrderId] = {}
         self._client_to_internal: dict[ClientOrderId, OrderId] = {}
         self._started = False
+        self._dropped_events: int = 0
 
     @property
     def venue(self) -> str:
@@ -273,7 +274,7 @@ class BinanceGateway(AbstractGateway):
     async def _publish_ack(
         self, req: OrderRequest, exchange_order_id: ExchangeOrderId
     ) -> None:
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.ORDERS,
             OrderAcknowledged(
                 ts_event=self._clock.now_ns(),
@@ -288,7 +289,7 @@ class BinanceGateway(AbstractGateway):
     async def _publish_reject(
         self, req: OrderRequest, reason: str, venue_code: str = ""
     ) -> None:
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.ORDERS,
             OrderRejected(
                 ts_event=self._clock.now_ns(),
@@ -307,7 +308,7 @@ class BinanceGateway(AbstractGateway):
         # We reuse OrderRejected to signal a cancel failure — same shape,
         # same OMS handler. The OMS sees this and knows the cancel didn't
         # take.
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.ORDERS,
             OrderRejected(
                 ts_event=self._clock.now_ns(),
@@ -320,6 +321,20 @@ class BinanceGateway(AbstractGateway):
         )
 
     # --- Helpers ---------------------------------------------------------
+
+    async def _safe_publish(self, topic: str, event: BaseEvent) -> bool:
+        """Publish to the bus; absorb BackpressureError and return False if dropped."""
+        try:
+            await self._bus.publish(topic, event)
+            return True
+        except BackpressureError as exc:
+            self._dropped_events += 1
+            _log.critical(
+                "bus backpressure; gateway event dropped [total_drops=%d] "
+                "topic=%r event_type=%r: %s",
+                self._dropped_events, topic, type(event).__name__, exc,
+            )
+            return False
 
     @staticmethod
     def _format_decimal(d: Decimal) -> str:

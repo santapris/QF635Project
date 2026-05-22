@@ -41,6 +41,7 @@ from ..core.events import (
     RiskDecision,
     SignalEvent,
 )
+from ..core.exceptions import BackpressureError
 from ..core.types import Quantity, Severity, StrategyId
 from ..event_bus.base import AbstractEventBus, Topic
 from .base import AbstractRiskRule, RuleResult
@@ -70,6 +71,7 @@ class RiskEngine:
         # instrument allow-lists shared across many strategies.
         self._global_rules: list[AbstractRiskRule] = []
         self._started = False
+        self._dropped_events: int = 0
 
     # --- Configuration ----------------------------------------------------
 
@@ -202,13 +204,27 @@ class RiskEngine:
 
     # --- Helpers ----------------------------------------------------------
 
+    async def _safe_publish(self, topic: str, event: BaseEvent) -> bool:
+        """Publish to the bus; absorb BackpressureError and return False if dropped."""
+        try:
+            await self._bus.publish(topic, event)
+            return True
+        except BackpressureError as exc:
+            self._dropped_events += 1
+            _log.critical(
+                "bus backpressure; risk event dropped [total_drops=%d] "
+                "topic=%r event_type=%r: %s",
+                self._dropped_events, topic, type(event).__name__, exc,
+            )
+            return False
+
     async def _engage_kill_switch(self, *, triggered_by: str, reason: str) -> None:
         """Engage the switch and publish a KillSwitchEvent. Idempotent."""
         was_engaged = self._kill_switch.engaged
         state = self._kill_switch.engage(triggered_by=triggered_by, reason=reason)
         if was_engaged:
             return  # Already on; first reason wins, no duplicate event.
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.ALERTS,
             KillSwitchEvent(
                 ts_event=self._clock.now_ns(),
@@ -229,7 +245,7 @@ class RiskEngine:
         reason: str,
         approved_quantity: Quantity | None = None,
     ) -> None:
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.RISK_DECISIONS,
             RiskDecision(
                 ts_event=self._clock.now_ns(),
@@ -246,7 +262,7 @@ class RiskEngine:
         )
 
     async def _publish_alert(self, rule_name: str, result: RuleResult) -> None:
-        await self._bus.publish(
+        await self._safe_publish(
             Topic.ALERTS,
             RiskAlertEvent(
                 ts_event=self._clock.now_ns(),
