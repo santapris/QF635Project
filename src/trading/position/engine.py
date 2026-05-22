@@ -228,6 +228,17 @@ class PositionEngine:
             items.append((book, mark))
         return aggregate_portfolio(items)
 
+    # --- Metrics ---------------------------------------------------------
+
+    def snapshot(self) -> dict:
+        """Return a point-in-time dict of operational counters."""
+        open_positions = sum(1 for b in self._books.values() if b.quantity != 0)
+        return {
+            "open_positions": open_positions,
+            "total_books": len(self._books),
+            "dropped_events": self._dropped_events,
+        }
+
     # --- Helpers ---------------------------------------------------------
 
     async def _safe_publish(self, topic: str, event: BaseEvent) -> bool:

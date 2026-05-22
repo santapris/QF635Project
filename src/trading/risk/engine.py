@@ -261,6 +261,15 @@ class RiskEngine:
             ),
         )
 
+    def snapshot(self) -> dict:
+        """Return a point-in-time dict of operational counters."""
+        ks = self._kill_switch.state if self._kill_switch.engaged else None
+        return {
+            "kill_switch_engaged": self._kill_switch.engaged,
+            "kill_switch_reason": ks.reason if ks else None,
+            "dropped_events": self._dropped_events,
+        }
+
     async def _publish_alert(self, rule_name: str, result: RuleResult) -> None:
         await self._safe_publish(
             Topic.ALERTS,

@@ -56,5 +56,9 @@ class SymbolMapper:
     def by_canonical(self, canonical: str) -> Instrument | None:
         return self._by_canonical.get(canonical)
 
+    def all_wire_symbols(self) -> list[str]:
+        """Return every Binance wire symbol registered with this mapper."""
+        return list(self._by_wire.keys())
+
 
 __all__ = ["SymbolMapper"]

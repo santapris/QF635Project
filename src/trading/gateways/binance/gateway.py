@@ -320,6 +320,59 @@ class BinanceGateway(AbstractGateway):
             ),
         )
 
+    # --- Startup sync ----------------------------------------------------
+
+    async def cancel_stale_orders(self) -> int:
+        """Cancel all open orders for every tracked instrument.
+
+        Should be called once immediately after :meth:`start` so that any
+        orders left over from a previous session do not interfere with the
+        new one. Returns the total number of orders cancelled.
+        """
+        total = 0
+        for wire_sym in self._symbols.all_wire_symbols():
+            try:
+                orders = await self._rest.request(
+                    "GET", "/api/v3/openOrders",
+                    params={"symbol": wire_sym},
+                    signed=True, weight=_W_OPEN_ORDERS,
+                )
+            except Exception:
+                _log.exception(
+                    "startup sync: failed to list open orders for %s; skipping",
+                    wire_sym,
+                )
+                continue
+            for order in orders:
+                order_id = order.get("orderId")
+                try:
+                    await self._rest.request(
+                        "DELETE", "/api/v3/order",
+                        params={"symbol": wire_sym, "orderId": order_id},
+                        signed=True, weight=_W_CANCEL_ORDER,
+                    )
+                    _log.warning(
+                        "startup sync: cancelled stale order orderId=%s symbol=%s",
+                        order_id, wire_sym,
+                    )
+                    total += 1
+                except Exception:
+                    _log.exception(
+                        "startup sync: failed to cancel stale order orderId=%s symbol=%s",
+                        order_id, wire_sym,
+                    )
+        return total
+
+    # --- Metrics ---------------------------------------------------------
+
+    def snapshot(self) -> dict:
+        """Return a point-in-time dict of operational counters."""
+        return {
+            "venue": self.venue,
+            "dropped_events": self._dropped_events,
+            "tracked_symbols": self._symbols.all_wire_symbols(),
+        }
+
     # --- Helpers ---------------------------------------------------------
 
     async def _safe_publish(self, topic: str, event: BaseEvent) -> bool:

@@ -144,6 +144,7 @@ async def _amain(args: argparse.Namespace) -> int:
     user_data = BinanceUserDataStream(
         bus=bus, clock=clock, config=config,
         listen_key_manager=listen_keys, symbols=symbols,
+        strategy_id_lookup=oms.strategy_id_for_client_order,
     )
 
     # --- Public market data feed --------------------------------------

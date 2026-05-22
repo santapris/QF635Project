@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from trading.config import build_live_app, load_config
+from trading.health import HealthServer
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -29,6 +30,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+    )
+    p.add_argument(
+        "--health-port", type=int, default=9090,
+        help="Port for /healthz and /metrics HTTP server (0 = disabled).",
     )
     return p.parse_args(argv)
 
@@ -42,6 +47,13 @@ async def _amain(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     app = build_live_app(config)
+
+    if args.health_port > 0:
+        app.health_server = HealthServer(
+            metrics_fn=app.metrics_snapshot,
+            port=args.health_port,
+        )
+
     await app.start()
     _log.info("trading app started")
 
