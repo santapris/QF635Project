@@ -20,7 +20,8 @@ needs :class:`SimulationGateway` (asyncio-sleep latency). Backtest needs
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -37,6 +38,7 @@ from ..core.instruments import Instrument
 from ..event_bus import AsyncioBus, MemoryBus
 from ..event_bus.base import AbstractEventBus
 from ..gateways import (
+    AbstractGateway,
     FeeModel,
     FillModel,
     LatencyModel,
@@ -44,6 +46,13 @@ from ..gateways import (
     SimulationGateway,
     SimulationGatewayConfig,
 )
+from ..gateways.binance.config import BinanceConfig, BinanceCredentials
+from ..gateways.binance.gateway import BinanceGateway
+from ..gateways.binance.listen_key import ListenKeyManager
+from ..gateways.binance.reconciler import BalanceReconciler
+from ..gateways.binance.rest_client import BinanceRESTClient
+from ..gateways.binance.symbols import SymbolMapper
+from ..gateways.binance.user_data import BinanceUserDataStream
 from ..oms import OMSEngine
 from ..position import AccountingMethod, EnginePortfolioView, PositionEngine
 from ..risk import RiskEngine
@@ -61,14 +70,18 @@ from ..strategy.examples import (
     MeanReversionStrategy,
     MomentumStrategy,
 )
+from ..health import HealthServer
 from .schema import (
     AppConfig,
+    BinanceGatewaySpec,
     BusBackend,
     BusConfig,
-    GatewaySpec,
     RuleSpec,
+    SimGatewaySpec,
     StrategySpec,
 )
+
+_log = logging.getLogger(__name__)
 
 
 # --- Helpers ----------------------------------------------------------------
@@ -162,7 +175,7 @@ def _build_rule(spec: RuleSpec) -> Any:
     raise ConfigError(f"unknown rule type: {spec.type}")
 
 
-def _build_sim_gateway_config(spec: GatewaySpec) -> SimulationGatewayConfig:
+def _build_sim_gateway_config(spec: SimGatewaySpec) -> SimulationGatewayConfig:
     return SimulationGatewayConfig(
         venue=spec.venue,
         fees=FeeModel(maker_bps=spec.maker_bps, taker_bps=spec.taker_bps),
@@ -180,6 +193,59 @@ def _build_sim_gateway_config(spec: GatewaySpec) -> SimulationGatewayConfig:
     )
 
 
+def _build_binance_components(
+    spec: BinanceGatewaySpec,
+    *,
+    bus: AbstractEventBus,
+    clock: Clock,
+    instruments: dict[str, Instrument],
+    oms: OMSEngine,
+    pos: PositionEngine,
+) -> tuple[BinanceGateway, list]:
+    """Build the Binance gateway plus its supporting services.
+
+    Returns ``(gateway, services)`` where ``services`` is a list of objects
+    with ``start()``/``stop()`` coroutines: [ListenKeyManager,
+    BinanceUserDataStream, BalanceReconciler].  The caller is responsible
+    for starting and stopping them in order.
+
+    Credentials are read from environment variables at build time; the
+    process must have the right env set before calling this.
+    """
+    cfg = BinanceConfig(
+        testnet=spec.testnet,
+        reconcile_interval_seconds=spec.reconcile_interval_seconds,
+    )
+    creds = BinanceCredentials.from_env(testnet=spec.testnet)
+    venue_insts = [i for i in instruments.values() if i.exchange == spec.venue]
+    if not venue_insts:
+        raise ConfigError(
+            f"no instruments declared for venue {spec.venue!r}; "
+            "add [[instruments]] entries with that exchange value",
+            venue=spec.venue,
+        )
+    symbols = SymbolMapper(venue_insts)
+    rest = BinanceRESTClient(config=cfg, credentials=creds, clock=clock)
+
+    gw = BinanceGateway(
+        bus=bus, clock=clock, config=cfg,
+        credentials=creds, symbols=symbols, rest_client=rest,
+    )
+    lkm = ListenKeyManager(rest=rest, config=cfg)
+    uds = BinanceUserDataStream(
+        bus=bus, clock=clock, config=cfg,
+        listen_key_manager=lkm, symbols=symbols,
+        strategy_id_lookup=oms.strategy_id_for_client_order,
+    )
+    reconciler = BalanceReconciler(
+        bus=bus, clock=clock, config=cfg, rest=rest,
+        position_engine=pos,
+        tracked_instruments=venue_insts,
+        mismatch_threshold=Decimal(spec.mismatch_threshold),
+    )
+    return gw, [lkm, uds, reconciler]
+
+
 # --- Live wiring ------------------------------------------------------------
 
 
@@ -193,28 +259,63 @@ class LiveApp:
     risk_engine: RiskEngine
     oms_engine: OMSEngine
     strategy_registry: StrategyRegistry
-    gateways: list[SimulationGateway]
+    gateways: list[AbstractGateway]
+    # Venue-specific supporting services: ListenKeyManagers,
+    # BinanceUserDataStreams, BalanceReconcilers.  Started after gateways
+    # (which connect REST), stopped before gateways in reverse order.
+    extra_services: list = field(default_factory=list)
+    # Optional HTTP health/metrics server.  None means disabled.
+    health_server: HealthServer | None = None
 
     async def start(self) -> None:
         await self.position_engine.start()
         await self.risk_engine.start()
         await self.oms_engine.start()
+        # Gateways first: they open the REST connection that extra services need.
         for gw in self.gateways:
             await gw.start()
+            # Immediately cancel any orders left over from a previous session.
+            if isinstance(gw, BinanceGateway):
+                cancelled = await gw.cancel_stale_orders()
+                if cancelled:
+                    _log.warning(
+                        "startup: cancelled %d stale order(s) on %s",
+                        cancelled, gw.venue,
+                    )
+        for svc in self.extra_services:
+            await svc.start()
         await self.strategy_registry.start()
         # Bus last so subscribers exist before any traffic.
         if hasattr(self.bus, "start"):
             await self.bus.start()
+        if self.health_server is not None:
+            await self.health_server.start()
 
     async def stop(self) -> None:
+        if self.health_server is not None:
+            await self.health_server.stop()
         if hasattr(self.bus, "stop"):
             await self.bus.stop()
         await self.strategy_registry.stop()
+        for svc in reversed(self.extra_services):
+            await svc.stop()
         for gw in self.gateways:
             await gw.stop()
         await self.oms_engine.stop()
         await self.risk_engine.stop()
         await self.position_engine.stop()
+
+    def metrics_snapshot(self) -> dict:
+        """Collect a point-in-time metrics dict from all running engines."""
+        snap: dict = {
+            "oms": self.oms_engine.snapshot(),
+            "risk": self.risk_engine.snapshot(),
+            "position": self.position_engine.snapshot(),
+            "gateways": [
+                gw.snapshot() for gw in self.gateways if hasattr(gw, "snapshot")
+            ],
+        }
+        return snap
 
 
 def build_live_app(config: AppConfig) -> LiveApp:
@@ -240,20 +341,24 @@ def build_live_app(config: AppConfig) -> LiveApp:
         signal_ttl_seconds=config.oms.signal_ttl_seconds,
     )
 
-    # Gateways. One SimulationGateway per declared venue.
-    gateways: list[SimulationGateway] = []
+    # Gateways. One gateway per declared venue spec.
+    gateways: list[AbstractGateway] = []
+    extra_services: list = []
     for gw_spec in config.gateways:
-        if gw_spec.type != "simulation":
-            raise ConfigError(
-                f"live app supports simulation gateways only here; got {gw_spec.type}",
-                venue=gw_spec.venue,
+        if isinstance(gw_spec, SimGatewaySpec):
+            gateways.append(
+                SimulationGateway(
+                    bus=bus, clock=clock,
+                    config=_build_sim_gateway_config(gw_spec),
+                )
             )
-        gateways.append(
-            SimulationGateway(
-                bus=bus, clock=clock,
-                config=_build_sim_gateway_config(gw_spec),
+        elif isinstance(gw_spec, BinanceGatewaySpec):
+            binance_gw, services = _build_binance_components(
+                gw_spec, bus=bus, clock=clock,
+                instruments=instruments, oms=oms, pos=pos,
             )
-        )
+            gateways.append(binance_gw)
+            extra_services.extend(services)
 
     # Strategy registry — gets a portfolio view backed by the position engine.
     portfolio = EnginePortfolioView(pos)
@@ -270,6 +375,7 @@ def build_live_app(config: AppConfig) -> LiveApp:
         clock=clock, bus=bus,
         position_engine=pos, risk_engine=risk, oms_engine=oms,
         strategy_registry=registry, gateways=gateways,
+        extra_services=extra_services,
     )
 
 

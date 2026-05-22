@@ -5,6 +5,7 @@ from .loader import load_config, load_config_from_dict
 from .schema import (
     AppConfig,
     BacktestSpec,
+    BinanceGatewaySpec,
     BusBackend,
     BusConfig,
     FeedHandlerSpec,
@@ -13,6 +14,7 @@ from .schema import (
     PositionSpec,
     RiskSpec,
     RuleSpec,
+    SimGatewaySpec,
     StrategySpec,
 )
 
@@ -20,6 +22,7 @@ __all__ = [
     "AppConfig",
     "BacktestApp",
     "BacktestSpec",
+    "BinanceGatewaySpec",
     "BusBackend",
     "BusConfig",
     "FeedHandlerSpec",
@@ -29,6 +32,7 @@ __all__ = [
     "PositionSpec",
     "RiskSpec",
     "RuleSpec",
+    "SimGatewaySpec",
     "StrategySpec",
     "build_backtest_app",
     "build_live_app",

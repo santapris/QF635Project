@@ -13,7 +13,7 @@ from __future__ import annotations
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -103,7 +103,9 @@ class PositionSpec(BaseModel):
     mark_to_market_interval_seconds: float = 5.0
 
 
-class GatewaySpec(BaseModel):
+class SimGatewaySpec(BaseModel):
+    """Simulation or backtest gateway (no real exchange connection)."""
+
     model_config = ConfigDict(extra="forbid")
 
     venue: str
@@ -118,6 +120,30 @@ class GatewaySpec(BaseModel):
     slippage_ticks: int = 0
     partial_fill_probability: float = 0.0
     seed: int | None = None
+
+
+class BinanceGatewaySpec(BaseModel):
+    """Real Binance Spot gateway.
+
+    API credentials are read from the environment — never from TOML.
+    Set ``BINANCE_TESTNET_API_KEY`` / ``BINANCE_TESTNET_API_SECRET`` for testnet,
+    or ``BINANCE_API_KEY`` / ``BINANCE_API_SECRET`` for live.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    venue: str = "BINANCE"
+    type: Literal["binance"]
+    testnet: bool = True
+    reconcile_interval_seconds: float = 60.0
+    mismatch_threshold: str = "0.0001"
+
+
+# Discriminated union — Pydantic selects the right model via the ``type`` field.
+GatewaySpec = Annotated[
+    Union[SimGatewaySpec, BinanceGatewaySpec],
+    Field(discriminator="type"),
+]
 
 
 class BacktestSpec(BaseModel):
@@ -150,6 +176,7 @@ class AppConfig(BaseModel):
 __all__ = [
     "AppConfig",
     "BacktestSpec",
+    "BinanceGatewaySpec",
     "BusBackend",
     "BusConfig",
     "FeedHandlerSpec",
@@ -158,5 +185,6 @@ __all__ = [
     "PositionSpec",
     "RiskSpec",
     "RuleSpec",
+    "SimGatewaySpec",
     "StrategySpec",
 ]
