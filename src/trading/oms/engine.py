@@ -90,6 +90,10 @@ class OMSEngine:
 
         # Active orders. Keyed by OrderId.
         self._orders: dict[OrderId, Order] = {}
+        # Reverse lookup: client_order_id -> order_id. Lets the user-data
+        # stream (and any other caller) resolve strategy attribution by
+        # client order id without scanning all orders.
+        self._coid_to_order_id: dict[ClientOrderId, OrderId] = {}
         # Algos keyed by parent order id.
         self._algos: dict[OrderId, ExecutionAlgo] = {}
         # Parent metadata for child orders (signal, strategy, instrument).
@@ -285,6 +289,7 @@ class OMSEngine:
             parent_order_id=parent_id,
         )
         self._orders[order_id] = order
+        self._coid_to_order_id[client_order_id] = order_id
 
         req = OrderRequest(
             ts_event=self._clock.now_ns(),
@@ -352,6 +357,32 @@ class OMSEngine:
 
     def open_orders(self) -> Iterable[Order]:
         return (o for o in self._orders.values() if not o.is_terminal)
+
+    def strategy_id_for_client_order(
+        self, coid: ClientOrderId
+    ) -> StrategyId | None:
+        """Return the strategy that owns ``coid``, or None if unknown.
+
+        Used by BinanceUserDataStream to stamp fills with the correct
+        strategy id without coupling the stream directly to OMS internals.
+        """
+        order_id = self._coid_to_order_id.get(coid)
+        if order_id is None:
+            return None
+        order = self._orders.get(order_id)
+        return order.strategy_id if order is not None else None
+
+    # --- Metrics ---------------------------------------------------------
+
+    def snapshot(self) -> dict:
+        """Return a point-in-time dict of operational counters."""
+        open_orders = sum(1 for o in self._orders.values() if not o.is_terminal)
+        return {
+            "open_orders": open_orders,
+            "total_orders": len(self._orders),
+            "active_algos": len(self._algos),
+            "dropped_events": self._dropped_events,
+        }
 
     # --- Helpers ---------------------------------------------------------
 

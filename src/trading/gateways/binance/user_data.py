@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Final
 from uuid import uuid4
@@ -71,10 +72,8 @@ class BinanceUserDataStream:
     OMS already generates uniquely per order).
 
     Strategy attribution: the user-data stream only knows the client order
-    id, not the strategy that sent it. The OMS already tracks
-    client_order_id -> strategy_id; we accept a lookup callable to bridge.
-    If no lookup is provided we default to a fixed ``StrategyId("unknown")``
-    on each event — useful for testing but not for production routing.
+    id, not the strategy that sent it. Pass ``oms.strategy_id_for_client_order``
+    as ``strategy_id_lookup`` to bridge OMS attribution to fill events.
     """
 
     def __init__(
@@ -85,7 +84,7 @@ class BinanceUserDataStream:
         config: BinanceConfig,
         listen_key_manager: ListenKeyManager,
         symbols: SymbolMapper,
-        strategy_id_lookup=None,
+        strategy_id_lookup: Callable[[ClientOrderId], StrategyId | None],
     ) -> None:
         if websockets is None:
             raise ImportError(
@@ -97,7 +96,7 @@ class BinanceUserDataStream:
         self._config = config
         self._listen_keys = listen_key_manager
         self._symbols = symbols
-        self._strategy_id_lookup = strategy_id_lookup or (lambda coid: StrategyId("unknown"))
+        self._strategy_id_lookup = strategy_id_lookup
         # Track which order_ids we've seen acks for so we can dedupe the
         # ack between the REST response and the WS executionReport. The
         # gateway publishes the ack on REST; the WS executionReport with
@@ -299,7 +298,7 @@ class BinanceUserDataStream:
 
         ts_event = Timestamp(int(msg.get("T", msg.get("E", 0))) * 1_000_000)
         ts_ingest = self._clock.now_ns()
-        strategy_id = self._strategy_id_lookup(client_order_id)
+        strategy_id = self._strategy_id_lookup(client_order_id) or StrategyId("unknown")
 
         if exec_type == "TRADE":
             await self._publish_fill(
