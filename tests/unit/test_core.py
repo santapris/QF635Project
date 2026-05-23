@@ -4,16 +4,22 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
 from trading.core import (
+    EventId,
+    OrderBookEvent,
+    OrderBookLevel,
     OrderStatus,
+    RiskDecision,
     Side,
     SimulatedClock,
     SignalEvent,
     StrategyId,
     TickEvent,
+    TradeEvent,
 )
 
 
@@ -113,3 +119,97 @@ def test_tick_event_mid_and_spread(clock, btc) -> None:
     )
     assert tick.mid == Decimal("50001")
     assert tick.spread == Decimal("2")
+
+
+def test_tick_event_bid_less_than_ask(clock, btc) -> None:
+    tick = TickEvent(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="md",
+        instrument=btc,
+        bid_price=Decimal("50000"),
+        bid_size=Decimal("1"),
+        ask_price=Decimal("50002"),
+        ask_size=Decimal("1"),
+    )
+    assert tick.bid_price < tick.ask_price
+
+
+def test_trade_event_aggressor_side(clock, btc) -> None:
+    trade = TradeEvent(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="md",
+        instrument=btc,
+        price=Decimal("50000"),
+        quantity=Decimal("0.5"),
+        aggressor_side=Side.BUY,
+        venue_trade_id="t1",
+    )
+    assert trade.aggressor_side == Side.BUY
+    assert trade.venue_trade_id == "t1"
+
+
+def test_order_book_event_fields(clock, btc) -> None:
+    ob = OrderBookEvent(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="md",
+        instrument=btc,
+        bids=(
+            OrderBookLevel(price=Decimal("50000"), quantity=Decimal("1")),
+            OrderBookLevel(price=Decimal("49999"), quantity=Decimal("2")),
+        ),
+        asks=(
+            OrderBookLevel(price=Decimal("50001"), quantity=Decimal("1.5")),
+            OrderBookLevel(price=Decimal("50002"), quantity=Decimal("0.5")),
+        ),
+        sequence=1,
+        is_snapshot=True,
+    )
+    assert ob.event_type == "order_book"
+    assert ob.is_snapshot is True
+    assert len(ob.bids) == 2
+    assert len(ob.asks) == 2
+    assert ob.bids[0].price > ob.bids[1].price
+
+
+def test_signal_event_defaults(clock, btc, strategy_id) -> None:
+    sig = SignalEvent(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="test",
+        strategy_id=strategy_id,
+        instrument=btc,
+        side=Side.BUY,
+        target_quantity=Decimal("0.1"),
+    )
+    assert sig.rationale == ""
+    assert sig.metadata == {}
+    assert sig.suggested_price is None
+
+
+def test_risk_decision_fields(clock, btc, strategy_id) -> None:
+    sig_id = EventId(uuid4())
+    approved = RiskDecision(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="risk",
+        signal_event_id=sig_id,
+        strategy_id=strategy_id,
+        approved=True,
+    )
+    assert approved.approved is True
+    assert approved.reason == ""
+
+    blocked = RiskDecision(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="risk",
+        signal_event_id=sig_id,
+        strategy_id=strategy_id,
+        approved=False,
+        reason="position limit breached",
+    )
+    assert not blocked.approved
+    assert "position" in blocked.reason

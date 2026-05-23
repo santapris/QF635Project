@@ -110,3 +110,38 @@ async def test_asyncio_bus_backpressure(clock, btc, strategy_id) -> None:
         await bus.publish(Topic.SIGNALS, _signal(clock, btc, strategy_id))
     block.set()
     await bus.stop()
+
+
+async def test_asyncio_bus_topics_are_isolated(clock, btc, strategy_id) -> None:
+    import asyncio
+    bus = AsyncioBus(queue_size=100)
+    received_a: list = []
+    received_b: list = []
+
+    async def handler_a(evt): received_a.append(evt)
+    async def handler_b(evt): received_b.append(evt)
+
+    await bus.subscribe(Topic.SIGNALS, handler_a)
+    await bus.subscribe(Topic.MARKET_DATA, handler_b)
+    await bus.start()
+    await bus.publish(Topic.SIGNALS, _signal(clock, btc, strategy_id))
+    await asyncio.sleep(0.05)
+    await bus.stop()
+    assert len(received_a) == 1
+    assert received_b == []
+
+
+async def test_asyncio_bus_ordered_delivery(clock, btc, strategy_id) -> None:
+    import asyncio
+    bus = AsyncioBus(queue_size=100)
+    prices: list[Decimal] = []
+
+    async def handler(evt): prices.append(evt.target_quantity)
+
+    await bus.subscribe(Topic.SIGNALS, handler)
+    await bus.start()
+    for qty in ["1", "2", "3"]:
+        await bus.publish(Topic.SIGNALS, _signal(clock, btc, strategy_id, qty=qty))
+    await asyncio.sleep(0.05)
+    await bus.stop()
+    assert prices == [Decimal("1"), Decimal("2"), Decimal("3")]
