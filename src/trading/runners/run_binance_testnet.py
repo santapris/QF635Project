@@ -14,12 +14,7 @@ End-to-end wiring:
 - A simple momentum strategy on BTC-USDT for demonstration.
 
 To run:
-
-    export BINANCE_API_KEY=<your testnet key>
-    export BINANCE_API_SECRET=<your testnet secret>
     python -m trading.runners.run_binance_testnet
-
-Get testnet keys at https://testnet.binance.vision/
 
 This is a long-running process — Ctrl-C to stop. The first run should
 fire signals when EMA fast/slow cross; you'll see ack/fill events in
