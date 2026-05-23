@@ -15,8 +15,8 @@ End-to-end wiring:
 
 To run:
 
-    export BINANCE_TESTNET_API_KEY=<your testnet key>
-    export BINANCE_TESTNET_API_SECRET=<your testnet secret>
+    export BINANCE_API_KEY=<your testnet key>
+    export BINANCE_API_SECRET=<your testnet secret>
     python -m trading.runners.run_binance_testnet
 
 Get testnet keys at https://testnet.binance.vision/
@@ -65,6 +65,7 @@ from trading.risk.rules import (
 from trading.strategy import StrategyRegistry
 from trading.strategy.examples import MomentumStrategy
 from trading.logging import configure_logging
+from trading.config import load_settings
 
 
 def _build_instruments() -> list[Instrument]:
@@ -91,8 +92,9 @@ async def _amain(args: argparse.Namespace) -> int:
     log = structlog.get_logger("binance.testnet")
 
     # --- Config and creds ---------------------------------------------
-    config = BinanceConfig(testnet=True, futures=True)
-    credentials = BinanceCredentials.from_env(testnet=True)
+    settings = load_settings()
+    config = BinanceConfig.from_settings(settings)
+    credentials = BinanceCredentials(api_key=settings.api_key, api_secret=settings.api_secret)
 
     instruments = _build_instruments()
     symbols = SymbolMapper(instruments)

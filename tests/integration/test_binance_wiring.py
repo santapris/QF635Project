@@ -109,9 +109,9 @@ def test_binance_spec_rejects_extra_fields() -> None:
 # ---------------------------------------------------------------------------
 
 def test_build_live_app_wires_binance_gateway(monkeypatch) -> None:
-    """With testnet creds in env, build_live_app constructs a BinanceGateway."""
-    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "test-key")
-    monkeypatch.setenv("BINANCE_TESTNET_API_SECRET", "test-secret")
+    """With creds in env, build_live_app constructs a BinanceGateway."""
+    monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
 
     raw = {**_base_dict(), "gateways": [{"type": "binance", "testnet": True}]}
     cfg = load_config_from_dict(raw)
@@ -137,8 +137,8 @@ def test_build_live_app_wires_binance_gateway(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 def test_build_live_app_binance_no_instruments_raises(monkeypatch) -> None:
-    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "k")
-    monkeypatch.setenv("BINANCE_TESTNET_API_SECRET", "s")
+    monkeypatch.setenv("BINANCE_API_KEY", "k")
+    monkeypatch.setenv("BINANCE_API_SECRET", "s")
 
     raw = {
         "instruments": [{
@@ -155,16 +155,16 @@ def test_build_live_app_binance_no_instruments_raises(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4.7  Missing env creds raise RuntimeError at build time
+# 4.7  Missing env creds raise ConfigError at build time
 # ---------------------------------------------------------------------------
 
-def test_build_live_app_binance_missing_creds_raises(monkeypatch) -> None:
-    monkeypatch.delenv("BINANCE_TESTNET_API_KEY", raising=False)
-    monkeypatch.delenv("BINANCE_TESTNET_API_SECRET", raising=False)
+def test_build_live_app_binance_missing_creds_raises(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BINANCE_API_KEY", "")
+    monkeypatch.setenv("BINANCE_API_SECRET", "")
 
     raw = {**_base_dict(), "gateways": [{"type": "binance", "testnet": True}]}
     cfg = load_config_from_dict(raw)
-    with pytest.raises(RuntimeError, match="missing Binance credentials"):
+    with pytest.raises(ConfigError, match="missing Binance API credentials"):
         build_live_app(cfg)
 
 

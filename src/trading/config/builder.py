@@ -80,6 +80,7 @@ from .schema import (
     SimGatewaySpec,
     StrategySpec,
 )
+from .settings import load_settings
 
 _log = structlog.get_logger(__name__)
 
@@ -211,12 +212,21 @@ def _build_binance_components(
 
     Credentials are read from environment variables at build time; the
     process must have the right env set before calling this.
+
+    URLs are read from the environment-aware settings so that dev and prod
+    can point at different endpoints without code changes.
     """
-    cfg = BinanceConfig(
-        testnet=spec.testnet,
+    settings = load_settings()
+    cfg = BinanceConfig.from_settings(
+        settings,
         reconcile_interval_seconds=spec.reconcile_interval_seconds,
     )
-    creds = BinanceCredentials.from_env(testnet=spec.testnet)
+    if not settings.api_key or not settings.api_secret:
+        raise ConfigError(
+            "missing Binance API credentials; set BINANCE_API_KEY and "
+            "BINANCE_API_SECRET in the environment or vault"
+        )
+    creds = BinanceCredentials(api_key=settings.api_key, api_secret=settings.api_secret)
     venue_insts = [i for i in instruments.values() if i.exchange == spec.venue]
     if not venue_insts:
         raise ConfigError(

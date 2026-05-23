@@ -225,7 +225,12 @@ async def test_reconciler_no_alert_when_matched(btc):
     await bus.subscribe(Topic.ALERTS, cap)
 
     rec = BalanceReconciler(
-        bus=bus, clock=clock, config=BinanceConfig(testnet=True),
+        bus=bus, clock=clock, config=BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    ),
         rest=rest, position_engine=pe, tracked_instruments=[btc],
         mismatch_threshold=Decimal("0.0001"),
     )
@@ -249,7 +254,12 @@ async def test_reconciler_alerts_on_divergence(btc):
     await bus.subscribe(Topic.ALERTS, cap)
 
     rec = BalanceReconciler(
-        bus=bus, clock=clock, config=BinanceConfig(testnet=True),
+        bus=bus, clock=clock, config=BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    ),
         rest=rest, position_engine=pe, tracked_instruments=[btc],
         mismatch_threshold=Decimal("0.0001"),
     )
@@ -279,7 +289,12 @@ async def test_reconciler_ignores_untracked_assets(btc):
     await bus.subscribe(Topic.ALERTS, cap)
 
     rec = BalanceReconciler(
-        bus=bus, clock=clock, config=BinanceConfig(testnet=True),
+        bus=bus, clock=clock, config=BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    ),
         rest=rest, position_engine=pe, tracked_instruments=[btc],
     )
     await rec.reconcile_once()
@@ -301,7 +316,12 @@ async def test_reconciler_threshold_suppresses_small_diffs(btc):
     await bus.subscribe(Topic.ALERTS, cap)
 
     rec = BalanceReconciler(
-        bus=bus, clock=clock, config=BinanceConfig(testnet=True),
+        bus=bus, clock=clock, config=BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    ),
         rest=rest, position_engine=pe, tracked_instruments=[btc],
         mismatch_threshold=Decimal("0.001"),  # 0.001 threshold > 0.00001 diff
     )

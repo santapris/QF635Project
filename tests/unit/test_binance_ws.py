@@ -93,7 +93,13 @@ class _FakeREST:
 
 
 async def test_listen_key_manager_obtains_initial():
-    cfg = BinanceConfig(testnet=True, listen_key_keepalive_seconds=0.01)
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+        listen_key_keepalive_seconds=0.01,
+    )
     rest = _FakeREST()
     rest.next_key = "lk-initial"
     mgr = ListenKeyManager(rest=rest, config=cfg)
@@ -108,7 +114,13 @@ async def test_listen_key_manager_obtains_initial():
 
 
 async def test_listen_key_manager_keepalive_fires():
-    cfg = BinanceConfig(testnet=True, listen_key_keepalive_seconds=0.05)
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+        listen_key_keepalive_seconds=0.05,
+    )
     rest = _FakeREST()
     mgr = ListenKeyManager(rest=rest, config=cfg)
     await mgr.start()
@@ -122,7 +134,13 @@ async def test_listen_key_manager_keepalive_fires():
 
 
 async def test_listen_key_manager_reissues_on_keepalive_failure():
-    cfg = BinanceConfig(testnet=True, listen_key_keepalive_seconds=0.02)
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+        listen_key_keepalive_seconds=0.02,
+    )
     rest = _FakeREST()
     rest.next_key = "lk-first"
     rest.fail_keepalive_after = 0  # fail the very next keepalive
@@ -217,7 +235,12 @@ def _execution_report_new(client_id: str) -> dict:
 async def _make_user_data_stream(mapper, btc_binance):
     """Build a UDS without starting it; we'll exercise _handle_frame directly."""
     bus = MemoryBus()
-    cfg = BinanceConfig(testnet=True)
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    )
     # We don't need a real listen-key manager for the parser tests.
     class _FakeLK:
         async def wait_for_recreation(self): return "fake-key"

@@ -54,8 +54,10 @@ class DevSettings(BaseSettings):
     api_key: str | None = None
     api_secret: str | None = None
 
-    rest_base: str = "https://demo-fapi.binance.com"
-    ws_base: str = "wss://fstream.binancefuture.com"
+    spot_rest_base: str = "https://testnet.binance.vision"
+    spot_ws_base: str = "wss://testnet.binance.vision"
+    futures_rest_base: str = "https://demo-fapi.binance.com"
+    futures_ws_base: str = "wss://fstream.binancefuture.com"
 
     @classmethod
     def create(cls) -> "DevSettings":

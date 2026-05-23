@@ -38,7 +38,12 @@ class _NullBus:
 
 
 def _make_gw(btc_inst, rest_client) -> BinanceGateway:
-    cfg = BinanceConfig(testnet=True)
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="https://demo-fapi.binance.com",
+        futures_ws_base="wss://fstream.binancefuture.com",
+    )
     creds = BinanceCredentials(api_key="k", api_secret="s")
     symbols = SymbolMapper([btc_inst])
     return BinanceGateway(

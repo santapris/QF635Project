@@ -10,3 +10,8 @@ class BaseSettings(PydanticBaseSettings):
     api_secret: str | None = None
 
     log_level: str = "INFO"
+
+    spot_rest_base: str
+    spot_ws_base: str
+    futures_rest_base: str
+    futures_ws_base: str

@@ -16,7 +16,7 @@ async def main() -> None:
     settings = load_settings()
     log.info("settings_loaded", environment=settings.environment, symbol=settings.symbol)
 
-    rest = BinanceREST(settings.rest_base, settings.api_key, settings.api_secret)
+    rest = BinanceREST(settings.futures_rest_base, settings.api_key, settings.api_secret)
     log.info("rest_ping", result=await rest.ping())
     log.info("rest_time", result=await rest.time())
 
@@ -31,7 +31,7 @@ async def main() -> None:
             min_notional=next((f for f in sym.get("filters", []) if f.get("filterType") == "MIN_NOTIONAL"), None),
         )
 
-    ws = BinanceWS(settings.ws_base)
+    ws = BinanceWS(settings.futures_ws_base)
     log.info("ws_connecting", stream="aggTrade", mode="one-shot")
     raw = await ws.read_one_agg_trade(settings.symbol)
     msg = json.loads(raw)

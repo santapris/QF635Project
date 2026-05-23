@@ -71,7 +71,10 @@ class DepthBookManager:
         self._rest = rest
         self._symbols = symbols
         self._instrument = instrument
-        self._config = config = config or getattr(rest, "_config", None) or BinanceConfig()
+        self._config = config = config or getattr(rest, "_config", None) or BinanceConfig(
+            spot_rest_base="", spot_ws_base="",
+            futures_rest_base="", futures_ws_base="",
+        )
         self._book = L2OrderBook(instrument)
         # Buffer used while we're fetching the snapshot.
         self._pre_snapshot_buffer: deque[dict] = deque()
@@ -107,7 +110,7 @@ class DepthBookManager:
         self._snapshot_pending = True
         wire = self._symbols.wire_symbol(self._instrument)
         snapshot = await self._rest.request(
-            "GET", (self._config.api_prefix + "/depth" if self._config.futures else self._config.api_prefix + "/depth"),
+            "GET", self._config.api_prefix + "/depth",
             params={"symbol": wire, "limit": _SNAPSHOT_LIMIT},
             weight=_W_DEPTH_SNAPSHOT_1000,
         )

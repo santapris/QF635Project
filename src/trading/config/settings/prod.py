@@ -12,5 +12,7 @@ class ProdSettings(BaseSettings):
     api_key: str
     api_secret: str
 
-    rest_base: str = "https://fapi.binance.com"
-    ws_base: str = "wss://fstream.binance.com"
+    spot_rest_base: str = "https://api.binance.com"
+    spot_ws_base: str = "wss://stream.binance.com:9443"
+    futures_rest_base: str = "https://fapi.binance.com"
+    futures_ws_base: str = "wss://fstream.binance.com"

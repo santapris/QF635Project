@@ -14,6 +14,7 @@ from trading.core import (
     StrategyId,
 )
 from trading.event_bus import MemoryBus
+from trading.gateways.binance.config import BinanceConfig, BinanceCredentials
 from trading.logging import configure_logging
 
 
@@ -67,3 +68,29 @@ def eth() -> Instrument:
 @pytest.fixture
 def strategy_id() -> StrategyId:
     return StrategyId("test-strategy")
+
+
+@pytest.fixture
+def binance_testnet_config() -> BinanceConfig:
+    return BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="https://demo-fapi.binance.com",
+        futures_ws_base="wss://fstream.binancefuture.com",
+    )
+
+
+@pytest.fixture
+def binance_testnet_config_futures() -> BinanceConfig:
+    return BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="https://demo-fapi.binance.com",
+        futures_ws_base="wss://fstream.binancefuture.com",
+        futures=True,
+    )
+
+
+@pytest.fixture
+def binance_credentials() -> BinanceCredentials:
+    return BinanceCredentials(api_key="k", api_secret="s")

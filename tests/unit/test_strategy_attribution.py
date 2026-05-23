@@ -220,7 +220,12 @@ async def test_user_data_stream_stamps_strategy_id(btc_inst, clock) -> None:
         async def subscribe(self, topic, handler): pass
         async def subscribe_many(self, topics, handler): pass
 
-    cfg = BinanceConfig(testnet=True)
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    )
     symbols = SymbolMapper([btc_inst])
 
     class _FakeLKM:
@@ -308,7 +313,12 @@ async def test_user_data_stream_unknown_fallback(btc_inst, clock) -> None:
     stream = BinanceUserDataStream(
         bus=_CaptureBus(),
         clock=clock,
-        config=BinanceConfig(testnet=True),
+        config=BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    ),
         listen_key_manager=_FakeLKM(),
         symbols=SymbolMapper([btc_inst]),
         strategy_id_lookup=lambda coid: None,

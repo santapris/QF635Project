@@ -146,68 +146,88 @@ def test_error_invalid_listen_key_is_auth():
 
 
 # =====================================================================
-# Credentials loading
+# Credentials
 # =====================================================================
 
-def test_credentials_from_env_testnet(monkeypatch):
-    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "test-key")
-    monkeypatch.setenv("BINANCE_TESTNET_API_SECRET", "test-secret")
-    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
-    creds = BinanceCredentials.from_env(testnet=True)
-    assert creds.api_key == "test-key" and creds.api_secret == "test-secret"
-
-
-def test_credentials_from_env_separation(monkeypatch):
-    """Testnet and live use different env vars — a live-marked load must
-    fail if only testnet env vars are set, even if testnet env is present.
-    This is the safety property: a typo on the testnet flag cannot use
-    live credentials."""
-    monkeypatch.setenv("BINANCE_TESTNET_API_KEY", "test-key")
-    monkeypatch.setenv("BINANCE_TESTNET_API_SECRET", "test-secret")
-    monkeypatch.delenv("BINANCE_API_KEY", raising=False)
-    monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
-    with pytest.raises(RuntimeError, match="BINANCE_API_KEY"):
-        BinanceCredentials.from_env(testnet=False)
-
-
-def test_credentials_missing_raises(monkeypatch):
-    monkeypatch.delenv("BINANCE_TESTNET_API_KEY", raising=False)
-    monkeypatch.delenv("BINANCE_TESTNET_API_SECRET", raising=False)
-    with pytest.raises(RuntimeError, match="missing Binance credentials"):
-        BinanceCredentials.from_env(testnet=True)
+def test_credentials_value_object():
+    creds = BinanceCredentials(api_key="test-key", api_secret="test-secret")
+    assert creds.api_key == "test-key"
+    assert creds.api_secret == "test-secret"
 
 
 # =====================================================================
 # Config
 # =====================================================================
 
-def test_config_defaults_to_testnet():
-    """Belt-and-braces: a freshly-constructed config must use testnet URLs."""
-    cfg = BinanceConfig()
-    assert cfg.testnet is True
+_SPOT_TESTNET_REST = "https://testnet.binance.vision"
+_SPOT_TESTNET_WS = "wss://testnet.binance.vision"
+_FUTURES_TESTNET_REST = "https://demo-fapi.binance.com"
+_FUTURES_TESTNET_WS = "wss://fstream.binancefuture.com"
+_SPOT_LIVE_REST = "https://api.binance.com"
+_SPOT_LIVE_WS = "wss://stream.binance.com:9443"
+_FUTURES_LIVE_REST = "https://fapi.binance.com"
+_FUTURES_LIVE_WS = "wss://fstream.binance.com"
+
+
+def test_config_spot_testnet_urls():
+    cfg = BinanceConfig(
+        spot_rest_base=_SPOT_TESTNET_REST,
+        spot_ws_base=_SPOT_TESTNET_WS,
+        futures_rest_base="",
+        futures_ws_base="",
+    )
+    assert cfg.rest_base_url == _SPOT_TESTNET_REST
+    assert cfg.ws_base_url == _SPOT_TESTNET_WS
     assert "testnet" in cfg.rest_base_url
 
 
-def test_config_live_url_when_testnet_false():
-    cfg = BinanceConfig(testnet=False)
+def test_config_spot_live_urls():
+    cfg = BinanceConfig(
+        spot_rest_base=_SPOT_LIVE_REST,
+        spot_ws_base=_SPOT_LIVE_WS,
+        futures_rest_base="",
+        futures_ws_base="",
+    )
+    assert cfg.rest_base_url == _SPOT_LIVE_REST
     assert "testnet" not in cfg.rest_base_url
-    assert cfg.rest_base_url == "https://api.binance.com"
+
 
 def test_config_futures_testnet_urls():
-    cfg = BinanceConfig(testnet=True, futures=True)
-    assert cfg.rest_base_url == "https://demo-fapi.binance.com"
-    assert cfg.ws_base_url == "wss://fstream.binancefuture.com"
+    cfg = BinanceConfig(
+        spot_rest_base="",
+        spot_ws_base="",
+        futures_rest_base=_FUTURES_TESTNET_REST,
+        futures_ws_base=_FUTURES_TESTNET_WS,
+        futures=True,
+    )
+    assert cfg.rest_base_url == _FUTURES_TESTNET_REST
+    assert cfg.ws_base_url == _FUTURES_TESTNET_WS
+
 
 def test_config_futures_api_prefix():
-    cfg = BinanceConfig(testnet=True, futures=True)
+    cfg = BinanceConfig(
+        spot_rest_base="", spot_ws_base="",
+        futures_rest_base="", futures_ws_base="",
+        futures=True,
+    )
     assert cfg.api_prefix == "/fapi/v1"
 
+
 def test_config_futures_listen_key_path():
-    cfg = BinanceConfig(testnet=True, futures=True)
+    cfg = BinanceConfig(
+        spot_rest_base="", spot_ws_base="",
+        futures_rest_base="", futures_ws_base="",
+        futures=True,
+    )
     assert cfg.listen_key_path == "/fapi/v1/listenKey"
 
+
 def test_config_futures_account_info_path():
-    cfg = BinanceConfig(testnet=True, futures=True)
+    cfg = BinanceConfig(
+        spot_rest_base="", spot_ws_base="",
+        futures_rest_base="", futures_ws_base="",
+        futures=True,
+    )
     assert cfg.account_path == "/fapi/v2/account"
 
 # =====================================================================
@@ -228,7 +248,13 @@ def _make_response(status: int, json_payload: dict, headers: dict | None = None)
 
 
 async def test_rest_client_signs_and_sends():
-    cfg = BinanceConfig(testnet=True, max_clock_drift_ms=10_000_000)
+    cfg = BinanceConfig(
+        spot_rest_base=_SPOT_TESTNET_REST,
+        spot_ws_base=_SPOT_TESTNET_WS,
+        futures_rest_base="",
+        futures_ws_base="",
+        max_clock_drift_ms=10_000_000,
+    )
     creds = BinanceCredentials(api_key="k", api_secret="s")
     clock = LiveClock()
 
@@ -267,7 +293,13 @@ async def test_rest_client_signs_and_sends():
 
 
 async def test_rest_client_translates_429_to_rate_limited():
-    cfg = BinanceConfig(testnet=True, max_clock_drift_ms=10_000_000)
+    cfg = BinanceConfig(
+        spot_rest_base=_SPOT_TESTNET_REST,
+        spot_ws_base=_SPOT_TESTNET_WS,
+        futures_rest_base="",
+        futures_ws_base="",
+        max_clock_drift_ms=10_000_000,
+    )
     creds = BinanceCredentials(api_key="k", api_secret="s")
     client = BinanceRESTClient(config=cfg, credentials=creds, clock=LiveClock())
 
@@ -290,7 +322,13 @@ async def test_rest_client_translates_429_to_rate_limited():
 
 
 async def test_rest_client_refuses_signed_without_creds():
-    cfg = BinanceConfig(testnet=True, max_clock_drift_ms=10_000_000)
+    cfg = BinanceConfig(
+        spot_rest_base=_SPOT_TESTNET_REST,
+        spot_ws_base=_SPOT_TESTNET_WS,
+        futures_rest_base="",
+        futures_ws_base="",
+        max_clock_drift_ms=10_000_000,
+    )
     client = BinanceRESTClient(config=cfg, credentials=None, clock=LiveClock())
     session = MagicMock()
     session.request = MagicMock(return_value=_make_response(
@@ -306,7 +344,13 @@ async def test_rest_client_refuses_signed_without_creds():
 
 async def test_rest_client_rejects_large_clock_drift():
     """If our wall-clock is way off Binance, refuse to start."""
-    cfg = BinanceConfig(testnet=True, max_clock_drift_ms=100)  # tight threshold
+    cfg = BinanceConfig(
+        spot_rest_base=_SPOT_TESTNET_REST,
+        spot_ws_base=_SPOT_TESTNET_WS,
+        futures_rest_base="",
+        futures_ws_base="",
+        max_clock_drift_ms=100,  # tight threshold
+    )
     client = BinanceRESTClient(config=cfg, credentials=None, clock=LiveClock())
 
     session = MagicMock()

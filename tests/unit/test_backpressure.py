@@ -299,7 +299,12 @@ def binance_gw(full_bus, clock, btc_inst):
     from trading.gateways.binance.config import BinanceConfig, BinanceCredentials
     from trading.gateways.binance.symbols import SymbolMapper
 
-    cfg = BinanceConfig(testnet=True)
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="",
+        futures_ws_base="",
+    )
     creds = BinanceCredentials(api_key="k", api_secret="s")
     symbols = SymbolMapper([btc_inst])
 

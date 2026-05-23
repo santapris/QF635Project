@@ -15,7 +15,7 @@ log = structlog.get_logger(__name__)
 
 async def main() -> None:
     settings = load_settings()
-    ws = BinanceWS(settings.ws_base)
+    ws = BinanceWS(settings.futures_ws_base)
     bus = AsyncioBus()
 
     async def log_event(evt):
