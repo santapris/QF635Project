@@ -1,4 +1,4 @@
-"""Unit tests for the Binance gateway: order translation, symbol map, end-to-end
+"""Unit tests for the Binance order_gateway: order translation, symbol map, end-to-end
 event publishing using a fake REST client."""
 
 from __future__ import annotations
@@ -25,15 +25,15 @@ from trading.core import (
     StrategyId,
     TimeInForce,
 )
-from trading.core.exceptions import GatewayError, OrderError
+from trading.core.exceptions import OrderGatewayError, OrderError
 from trading.event_bus import MemoryBus, Topic
-from trading.gateways.binance import (
+from trading.order_gateways.binance import (
     BinanceConfig,
     BinanceCredentials,
-    BinanceGateway,
+    BinanceOrderGateway,
     SymbolMapper,
 )
-from trading.gateways.binance.order_translation import (
+from trading.order_gateways.binance.order_translation import (
     order_type_to_binance,
     side_from_binance,
     side_to_binance,
@@ -133,7 +133,7 @@ def test_tif_translation():
     assert tif_to_binance(TimeInForce.FOK) == "FOK"
 
 
-# --- Gateway with fake REST client ---------------------------------------
+# --- OrderGateway with fake REST client ---------------------------------------
 
 class _FakeREST:
     """Records every call. Configurable responses or exceptions."""
@@ -168,7 +168,7 @@ def _gw_with_fake(rest, instruments):
     )
     creds = BinanceCredentials(api_key="k", api_secret="s")
     mapper = SymbolMapper(instruments)
-    gw = BinanceGateway(
+    gw = BinanceOrderGateway(
         bus=bus, clock=LiveClock(), config=cfg, credentials=creds,
         symbols=mapper, rest_client=rest,
     )
@@ -193,7 +193,7 @@ def _order_request(instrument, **overrides) -> OrderRequest:
     return OrderRequest(**defaults)
 
 
-async def test_gateway_sends_market_order(btc_binance):
+async def test_order_gateway_sends_market_order(btc_binance):
     rest = _FakeREST()
     rest.responses.append({"orderId": 12345, "status": "NEW"})
     bus, gw = _gw_with_fake(rest, [btc_binance])
@@ -220,7 +220,7 @@ async def test_gateway_sends_market_order(btc_binance):
     assert acks[0].exchange_order_id == "12345"
 
 
-async def test_gateway_sends_limit_order(btc_binance):
+async def test_order_gateway_sends_limit_order(btc_binance):
     rest = _FakeREST()
     rest.responses.append({"orderId": 99, "status": "NEW"})
     bus, gw = _gw_with_fake(rest, [btc_binance])
@@ -238,7 +238,7 @@ async def test_gateway_sends_limit_order(btc_binance):
     assert params["price"] == "50000.5"  # normalized
 
 
-async def test_gateway_post_only_becomes_limit_maker(btc_binance):
+async def test_order_gateway_post_only_becomes_limit_maker(btc_binance):
     rest = _FakeREST()
     rest.responses.append({"orderId": 1, "status": "NEW"})
     bus, gw = _gw_with_fake(rest, [btc_binance])
@@ -253,7 +253,7 @@ async def test_gateway_post_only_becomes_limit_maker(btc_binance):
     assert params["type"] == "LIMIT_MAKER"
 
 
-async def test_gateway_publishes_rejection_on_logical_error(btc_binance):
+async def test_order_gateway_publishes_rejection_on_logical_error(btc_binance):
     """Insufficient balance should produce an OrderRejected event."""
     rest = _FakeREST()
     rest.responses.append(OrderError(
@@ -269,7 +269,7 @@ async def test_gateway_publishes_rejection_on_logical_error(btc_binance):
     assert "insufficient balance" in rejs[0].reason.lower()
 
 
-async def test_gateway_publishes_rejection_on_bad_symbol(btc_binance):
+async def test_order_gateway_publishes_rejection_on_bad_symbol(btc_binance):
     rest = _FakeREST()
     rest.responses.append(OrderError("binance error -1121: Invalid symbol.", code=-1121))
     bus, gw = _gw_with_fake(rest, [btc_binance])
@@ -279,20 +279,20 @@ async def test_gateway_publishes_rejection_on_bad_symbol(btc_binance):
     assert len(rejs) == 1
 
 
-async def test_gateway_publishes_rejection_on_transport_error(btc_binance):
+async def test_order_gateway_publishes_rejection_on_transport_error(btc_binance):
     """A transport error has unknown order status; we reject and surface."""
     rest = _FakeREST()
-    rest.responses.append(GatewayError("connection lost"))
+    rest.responses.append(OrderGatewayError("connection lost"))
     bus, gw = _gw_with_fake(rest, [btc_binance])
     await gw.start()
     await bus.publish(Topic.ORDERS, _order_request(btc_binance))
     rejs = [e for e in bus.published_on(Topic.ORDERS) if isinstance(e, OrderRejected)]
     assert len(rejs) == 1
-    assert "gateway error" in rejs[0].reason.lower()
+    assert "order_gateway error" in rejs[0].reason.lower()
 
 
-async def test_gateway_ignores_non_binance_orders():
-    """If a non-Binance instrument leaks through, gateway must not call REST."""
+async def test_order_gateway_ignores_non_binance_orders():
+    """If a non-Binance instrument leaks through, order_gateway must not call REST."""
     rest = _FakeREST()
     bus, gw = _gw_with_fake(rest, [])  # no Binance instruments
     await gw.start()
@@ -306,7 +306,7 @@ async def test_gateway_ignores_non_binance_orders():
     assert rest.calls == []
 
 
-async def test_gateway_sends_cancel(btc_binance):
+async def test_order_gateway_sends_cancel(btc_binance):
     rest = _FakeREST()
     rest.responses.append({"orderId": 99, "status": "CANCELED"})
     bus, gw = _gw_with_fake(rest, [btc_binance])
@@ -324,7 +324,7 @@ async def test_gateway_sends_cancel(btc_binance):
     assert params["origClientOrderId"] == "cli-abc"
 
 
-async def test_gateway_format_decimal_no_exponent(btc_binance):
+async def test_order_gateway_format_decimal_no_exponent(btc_binance):
     """Verify quantities like 0.00001 don't get serialized as 1E-5."""
     rest = _FakeREST()
     rest.responses.append({"orderId": 1, "status": "NEW"})

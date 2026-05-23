@@ -1,6 +1,6 @@
-"""Gateway abstraction.
+"""OrderGateway abstraction.
 
-A *gateway* is the platform's adapter to one venue. It owns the
+A *order_gateway* is the platform's adapter to one venue. It owns the
 direction-changing translation:
 
 - inbound (from OMS): take canonical :class:`OrderRequest` /
@@ -12,13 +12,13 @@ direction-changing translation:
   :class:`OrderCancelled` events on ``orders`` and :class:`FillEvent`
   on ``fills``.
 
-Gateways own venue-specific concerns: authentication, rate limits,
+OrderGateways own venue-specific concerns: authentication, rate limits,
 retry policies, error-code translation, and clock drift. The OMS
 talks to all of them through this one interface.
 
 Two implementations land in this batch:
 
-- :class:`SimulationGateway` — full-featured simulator with configurable
+- :class:`SimulationOrderGateway` — full-featured simulator with configurable
   fill semantics, latency, fees, and reject scenarios. The default for
   paper trading and the foundation for the backtest engine.
 - Real exchange adapters (Binance, Coinbase, etc.) follow this same
@@ -34,7 +34,7 @@ from collections.abc import Iterable
 from ..core.instruments import Instrument
 
 
-class AbstractGateway(ABC):
+class AbstractOrderGateway(ABC):
     """Venue adapter. Subscribes to ``orders``; publishes acks/rejects/fills."""
 
     @property
@@ -44,31 +44,31 @@ class AbstractGateway(ABC):
 
     @abstractmethod
     async def start(self) -> None:
-        """Bring up the gateway: connect, authenticate, subscribe to ``orders``."""
+        """Bring up the order_gateway: connect, authenticate, subscribe to ``orders``."""
 
     @abstractmethod
     async def stop(self) -> None:
         """Shut down cleanly: drain pending, disconnect, release resources."""
 
 
-class AbstractGatewayRegistry(ABC):
-    """Routes order events to the gateway that owns the relevant instrument.
+class AbstractOrderGatewayRegistry(ABC):
+    """Routes order events to the order_gateway that owns the relevant instrument.
 
-    Production use: one gateway per venue, registry chooses by
+    Production use: one order_gateway per venue, registry chooses by
     ``instrument.exchange``. The OMS doesn't care which venue a signal
-    targets; the gateway selection happens here.
+    targets; the order_gateway selection happens here.
 
-    For single-venue deployments, instantiate one gateway and skip the
-    registry — the gateway can subscribe to ``orders`` directly.
+    For single-venue deployments, instantiate one order_gateway and skip the
+    registry — the order_gateway can subscribe to ``orders`` directly.
     """
 
     @abstractmethod
-    def register(self, gateway: AbstractGateway, *, venues: Iterable[str]) -> None:
-        """Associate a gateway with one or more venue identifiers."""
+    def register(self, order_gateway: AbstractOrderGateway, *, venues: Iterable[str]) -> None:
+        """Associate a order_gateway with one or more venue identifiers."""
 
     @abstractmethod
-    def gateway_for(self, instrument: Instrument) -> AbstractGateway | None:
-        """Return the gateway that handles ``instrument.exchange``, or None."""
+    def order_gateway_for(self, instrument: Instrument) -> AbstractOrderGateway | None:
+        """Return the order_gateway that handles ``instrument.exchange``, or None."""
 
 
-__all__ = ["AbstractGateway", "AbstractGatewayRegistry"]
+__all__ = ["AbstractOrderGateway", "AbstractOrderGatewayRegistry"]

@@ -1,4 +1,4 @@
-"""Simulation gateway.
+"""Simulation order_gateway.
 
 A complete in-process venue simulator. Owns:
 
@@ -59,8 +59,8 @@ from ..core.types import (
     StrategyId,
 )
 from ..event_bus.base import AbstractEventBus, Topic
-from .base import AbstractGateway
-from .sim_config import SimulationGatewayConfig
+from .base import AbstractOrderGateway
+from .sim_config import SimulationOrderGatewayConfig
 
 _log = structlog.get_logger(__name__)
 
@@ -88,7 +88,7 @@ class _TopOfBook:
     ask: Price | None = None
 
 
-class SimulationGateway(AbstractGateway):
+class SimulationOrderGateway(AbstractOrderGateway):
     """In-process venue simulator with realistic order semantics."""
 
     def __init__(
@@ -96,7 +96,7 @@ class SimulationGateway(AbstractGateway):
         *,
         bus: AbstractEventBus,
         clock: Clock,
-        config: SimulationGatewayConfig,
+        config: SimulationOrderGatewayConfig,
     ) -> None:
         self._bus = bus
         self._clock = clock
@@ -146,7 +146,7 @@ class SimulationGateway(AbstractGateway):
     # --- Order submission -------------------------------------------------
 
     async def _handle_order_request(self, req: OrderRequest) -> None:
-        # Filter venue. In a single-gateway deployment this is always
+        # Filter venue. In a single-order_gateway deployment this is always
         # true; in a multi-venue setup the registry would route, but we
         # also defend here.
         if req.instrument.exchange != self._venue:
@@ -489,4 +489,4 @@ class SimulationGateway(AbstractGateway):
         await asyncio.sleep(ms / 1000.0)
 
 
-__all__ = ["SimulationGateway"]
+__all__ = ["SimulationOrderGateway"]

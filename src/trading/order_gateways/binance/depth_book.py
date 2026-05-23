@@ -30,7 +30,7 @@ from collections import deque
 from decimal import Decimal
 from typing import Final
 
-from trading.gateways.binance.config import BinanceConfig
+from trading.order_gateways.binance.config import BinanceConfig
 
 from ...core.events import OrderBookEvent, TickEvent
 from ...core.exceptions import SequenceGapError

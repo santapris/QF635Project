@@ -6,8 +6,8 @@ Usage:
 Starts the wired-up app, then waits for SIGINT/SIGTERM. On shutdown signal,
 stops cleanly and exits.
 
-Note: with the current gateway set this runs as paper trading against the
-:class:`SimulationGateway`. Wiring in a real exchange gateway is a swap
+Note: with the current order_gateway set this runs as paper trading against the
+:class:`SimulationOrderGateway`. Wiring in a real exchange order_gateway is a swap
 of one config section once an adapter is implemented.
 """
 

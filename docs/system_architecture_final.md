@@ -10,7 +10,7 @@ A modular, event‑sourced, exchange‑agnostic trading platform optimized for l
 
 Core principles
 - Event sourcing and deterministic replay (same code paths for backtest and live)
-- Strict boundaries: Strategy, Risk, OMS, Gateway, Position/PnL, Feed, Backtest
+- Strict boundaries: Strategy, Risk, OMS, OrderGateway, Position/PnL, Feed, Backtest
 - Topic contracts over function coupling (pub/sub first)
 - Venue/strategy agnosticism via adapters and plugin interfaces
 - Operability: kill switch, observability, throttling, reconciliation
@@ -23,7 +23,7 @@ Core principles
 - signals: SignalEvent (from Strategy)
 - risk-decisions: RiskDecision (APPROVED | REJECTED | MODIFIED)
 - orders: OrderRequest (from OMS)
-- fills: FillEvent, OrderAcknowledged (from Gateways)
+- fills: FillEvent, OrderAcknowledged (from OrderGateways)
 - positions: PositionUpdateEvent, PnLSnapshotEvent (from Position Engine)
 - alerts: warnings/errors from Risk/OMS/Feed
 - system: KillSwitchEvent and admin broadcasts
@@ -35,10 +35,10 @@ Partitioning: by instrument_id, or {instrument_id, strategy_id} when multi‑str
 ## 3. High‑Level Architecture (HLD)
 
 ```
-[ Exchanges ]── WS/REST/FIX ──▶ Feed Handlers ──▶ Event Bus ──▶ Strategy ──▶ Risk ──▶ OMS ──▶ Gateways ──▶ Exchange
+[ Exchanges ]── WS/REST/FIX ──▶ Feed Handlers ──▶ Event Bus ──▶ Strategy ──▶ Risk ──▶ OMS ──▶ OrderGateways ──▶ Exchange
                                               ▲              │           │          │                  │
                                               │              ▼           ▼          ▼                  ▼
-                                        Backtest/Replay ◀── Positions/PnL ◀── Fills ◀── Gateways     Observability
+                                        Backtest/Replay ◀── Positions/PnL ◀── Fills ◀── OrderGateways     Observability
 ```
 
 Components
@@ -50,7 +50,7 @@ Components
   - Pre‑trade rule pipeline (position, notional, drawdown, loss rate, concentration, VPIN circuit breaker). Emits RiskDecision. Owns explicit kill switch.
 - OMS (Order Management)
   - Order FSM, timeouts, cancel/replace, idempotency, dual throttles (request weight + order counts), outbox → publishes orders.
-- Gateways (Exchange/Broker)
+- OrderGateways (Exchange/Broker)
   - Venue protocol adapters (HMAC REST, WS user streams, FIX). Map internal IDs ↔ external, retries with jitter, publish acks/fills.
 - Position & PnL
   - Real‑time inventory and PnL; FIFO/LIFO/WAC; periodic reconciliation; publishes positions and PnL snapshots.
@@ -102,7 +102,7 @@ Components
 - order_limiter.py: 1s/1m/1d order windows; can_place/record/wait_if_needed
 - outbox: durable OrderRequest persisted before publish → relay ensures delivery
 
-4.7 Gateways
+4.7 OrderGateways
 - base.py: place/cancel/replace/query/subscribe_fills
 - binance/: REST HMAC, user data stream (listenKey keepalive 25m), retries with jitter, mapping, idempotency by client_order_id + exchange_order_id
 - others: coinbase/, ib_fix/, simulation/
@@ -123,14 +123,14 @@ Components
 
 4.11 Observability & Ops
 - structlog JSON logs; Prometheus metrics (latency histograms, counters); OpenTelemetry traces (trace_id propagation)
-- Health monitors: feed staleness, gateway error rate; reconnect backoff with jitter; chaos drills
+- Health monitors: feed staleness, order_gateway error rate; reconnect backoff with jitter; chaos drills
 - Operator console: RBAC, enable/disable strategy, manual orders, kill switch, config hot‑reload
 
 ---
 
 ## 5. Phased Rollout
 
-- Phase 1 (MVP, single process): AsyncioBus; Binance testnet depth/aggTrade; A‑S quoting; position limit + VPIN breaker; OMS+gateway; Parquet logging
+- Phase 1 (MVP, single process): AsyncioBus; Binance testnet depth/aggTrade; A‑S quoting; position limit + VPIN breaker; OMS+order_gateway; Parquet logging
 - Phase 2 (robust live): user data stream fills; outbox; idempotency; throttles; reconciliation; dashboards
 - Phase 3 (scale): KafkaBus; Timescale/Postgres; tracing; shadow trading; multi‑strategy, multi‑venue
 - Phase 4 (prod): HA deployment, RBAC console, DR runbooks, chaos testing, canary rollouts
@@ -201,8 +201,8 @@ Notes
 
 ## 9. Deliverables & Next Steps
 
-- Phase 1 deliverables: AsyncioBus, Binance feed normalizer, A‑S strategy, minimal Risk, OMS+Binance gateway, Position/PnL, connectivity tests, structured logs, Parquet recorder
-- Immediate next: implement AsyncioBus + normalized events for depth/aggTrade; wire one end‑to‑end path Strategy→Risk→OMS→Gateway (paper trading mode), then enable user data fills
+- Phase 1 deliverables: AsyncioBus, Binance feed normalizer, A‑S strategy, minimal Risk, OMS+Binance order_gateway, Position/PnL, connectivity tests, structured logs, Parquet recorder
+- Immediate next: implement AsyncioBus + normalized events for depth/aggTrade; wire one end‑to‑end path Strategy→Risk→OMS→OrderGateway (paper trading mode), then enable user data fills
 
 ---
 

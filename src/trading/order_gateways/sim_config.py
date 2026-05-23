@@ -1,6 +1,6 @@
-"""Configuration types for the simulation gateway.
+"""Configuration types for the simulation order_gateway.
 
-Kept separate from the gateway code so they're easy to discover, easy
+Kept separate from the order_gateway code so they're easy to discover, easy
 to override per-test, and not buried in a long file.
 """
 
@@ -43,7 +43,7 @@ class LatencyModel:
     - market fill response
 
     All values in milliseconds. Zero is allowed and produces an
-    instantaneous gateway (useful for unit tests).
+    instantaneous order_gateway (useful for unit tests).
     """
 
     submit_ack_ms: float = 5.0
@@ -93,7 +93,7 @@ class RejectModel:
 
 
 @dataclass(frozen=True, slots=True)
-class SimulationGatewayConfig:
+class SimulationOrderGatewayConfig:
     venue: str
     fees: FeeModel = field(default_factory=FeeModel)
     latency: LatencyModel = field(default_factory=LatencyModel)
@@ -108,5 +108,5 @@ __all__ = [
     "FillModel",
     "LatencyModel",
     "RejectModel",
-    "SimulationGatewayConfig",
+    "SimulationOrderGatewayConfig",
 ]

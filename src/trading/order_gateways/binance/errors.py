@@ -22,8 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ...core.exceptions import (
-    GatewayAuthError,
-    GatewayError,
+    OrderGatewayAuthError,
+    OrderGatewayError,
     OrderError,
     RateLimitedError,
 )
@@ -111,13 +111,13 @@ def translate_error(err: BinanceErrorResponse, *, retry_after: float | None = No
             http_status=err.http_status,
         )
     if err.is_auth_error:
-        return GatewayAuthError(
+        return OrderGatewayAuthError(
             f"binance auth failed: {err.msg} (code {err.code})",
             code=err.code,
         )
     if err.is_logical_reject:
         # These are real rejection reasons — insufficient balance, etc.
-        # OrderError carries the code; the gateway inspects ``is_logical_reject``
+        # OrderError carries the code; the order_gateway inspects ``is_logical_reject``
         # on the BinanceErrorResponse and publishes an OrderRejected event
         # rather than raising further.
         return OrderError(
@@ -134,7 +134,7 @@ def translate_error(err: BinanceErrorResponse, *, retry_after: float | None = No
             http_status=err.http_status,
         )
     # No code: probably a generic HTTP-level failure.
-    return GatewayError(
+    return OrderGatewayError(
         f"binance HTTP {err.http_status}: {err.msg}",
         http_status=err.http_status,
     )

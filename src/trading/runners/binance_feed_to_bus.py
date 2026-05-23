@@ -7,7 +7,7 @@ import structlog
 
 from trading.config import load_settings
 from trading.event_bus.asyncio_bus import AsyncioBus
-from trading.gateways.binance.ws import BinanceWS
+from trading.order_gateways.binance.ws import BinanceWS
 from trading.feed_handler.normalizer import normalize_agg_trade, normalize_depth5
 
 log = structlog.get_logger(__name__)

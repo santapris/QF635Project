@@ -5,7 +5,7 @@ Subscribes to the user data stream at
 ``executionReport`` events Binance emits into our canonical events:
 
 - ``executionReport`` with ``x=NEW`` → :class:`OrderAcknowledged`
-  (already published by the gateway on REST ack; we suppress this one)
+  (already published by the order_gateway on REST ack; we suppress this one)
 - ``executionReport`` with ``x=TRADE`` → :class:`FillEvent`
 - ``executionReport`` with ``x=CANCELED`` → :class:`OrderCancelled`
 - ``executionReport`` with ``x=EXPIRED`` → :class:`OrderCancelled`
@@ -99,12 +99,12 @@ class BinanceUserDataStream:
         self._strategy_id_lookup = strategy_id_lookup
         # Track which order_ids we've seen acks for so we can dedupe the
         # ack between the REST response and the WS executionReport. The
-        # gateway publishes the ack on REST; the WS executionReport with
+        # order_gateway publishes the ack on REST; the WS executionReport with
         # x=NEW would publish a second one, so we suppress those.
         self._task: asyncio.Task[None] | None = None
         self._stop = False
         # Map client_order_id -> our OrderId. Populated as we see acks
-        # come back from the REST gateway via the bus.
+        # come back from the REST order_gateway via the bus.
         self._client_to_order_id: dict[ClientOrderId, OrderId] = {}
 
     # --- Lifecycle -------------------------------------------------------
@@ -114,7 +114,7 @@ class BinanceUserDataStream:
             return
         # We need to know our OrderId for each client_order_id Binance reports
         # — so subscribe to the orders topic and snoop on OrderAcknowledged
-        # events the gateway publishes.
+        # events the order_gateway publishes.
         await self._bus.subscribe(Topic.ORDERS, self._on_order_event)
         self._task = asyncio.create_task(
             self._run_loop(), name="binance-user-data-stream"
@@ -135,7 +135,7 @@ class BinanceUserDataStream:
     async def _on_order_event(self, event: BaseEvent) -> None:
         """Snoop on OrderAcknowledged to capture client_order_id -> order_id.
 
-        We don't republish — that's the gateway's job. We just learn the
+        We don't republish — that's the order_gateway's job. We just learn the
         mapping so we can stamp incoming WS fills with the correct OrderId.
         """
         from ...core.events import OrderAcknowledged
@@ -336,7 +336,7 @@ class BinanceUserDataStream:
                 ),
             )
         elif exec_type == "NEW":
-            # Binance sends NEW on every order acceptance. The gateway
+            # Binance sends NEW on every order acceptance. The order_gateway
             # already published OrderAcknowledged on REST. Suppress to
             # avoid duplicate events.
             pass

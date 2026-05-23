@@ -2,7 +2,7 @@
 
 Centralised legal-transition table. Every status change in
 :class:`Order` goes through :func:`validate_transition`. The OMS treats
-illegal transitions as bugs in the gateway adapter (or in our own
+illegal transitions as bugs in the order_gateway adapter (or in our own
 logic) and raises rather than silently accepting them — a desynced
 state machine is the worst kind of OMS bug.
 """
@@ -16,7 +16,7 @@ from ..core.types import OrderStatus
 # only when creating a fresh order). Values are sets of legal destinations.
 #
 # Edge cases worth noting:
-# - PENDING_NEW -> CANCELLED: cancel arrived before the gateway acked.
+# - PENDING_NEW -> CANCELLED: cancel arrived before the order_gateway acked.
 #   Some venues handle this; we accept it.
 # - PENDING_CANCEL -> FILLED / PARTIALLY_FILLED: cancel raced against
 #   a fill on the venue's side and lost. Real and frequent in production.

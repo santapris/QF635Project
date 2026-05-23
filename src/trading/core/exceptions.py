@@ -98,15 +98,15 @@ class OrderNotFoundError(OrderError):
     """Lookup by id failed."""
 
 
-class GatewayError(TradingError):
-    """Base class for exchange gateway errors."""
+class OrderGatewayError(TradingError):
+    """Base class for exchange order_gateway errors."""
 
 
-class RateLimitedError(GatewayError):
+class RateLimitedError(OrderGatewayError):
     """Exchange returned a rate-limit response. Carries retry-after seconds."""
 
 
-class GatewayAuthError(GatewayError):
+class OrderGatewayAuthError(OrderGatewayError):
     """Authentication with the exchange failed."""
 
 
@@ -127,8 +127,8 @@ __all__ = [
     "EventBusError",
     "FeedDisconnectedError",
     "FeedError",
-    "GatewayAuthError",
-    "GatewayError",
+    "OrderGatewayAuthError",
+    "OrderGatewayError",
     "InvalidStateTransitionError",
     "KillSwitchEngaged",
     "OrderError",

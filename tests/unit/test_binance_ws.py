@@ -31,13 +31,13 @@ from trading.core import (
     StrategyId,
 )
 from trading.event_bus import MemoryBus, Topic
-from trading.gateways.binance import (
+from trading.order_gateways.binance import (
     BinanceConfig,
     ListenKeyManager,
     SymbolMapper,
 )
-from trading.gateways.binance import stream_names
-from trading.gateways.binance.user_data import BinanceUserDataStream
+from trading.order_gateways.binance import stream_names
+from trading.order_gateways.binance.user_data import BinanceUserDataStream
 
 
 # --- Stream names --------------------------------------------------------
@@ -256,7 +256,7 @@ async def _make_user_data_stream(mapper, btc_binance):
 async def test_user_data_trade_publishes_fill(mapper, btc_binance):
     bus, stream = await _make_user_data_stream(mapper, btc_binance)
     # Seed the client_order_id -> order_id mapping by publishing an ack
-    # the way the gateway would.
+    # the way the order_gateway would.
     order_id = OrderId(uuid4())
     client_id = ClientOrderId("strat-abc123")
     await bus.subscribe(Topic.ORDERS, stream._on_order_event)
@@ -323,14 +323,14 @@ async def test_user_data_reject_publishes_order_rejected(mapper, btc_binance):
 
 
 async def test_user_data_new_does_not_duplicate_ack(mapper, btc_binance):
-    """Critical: the WS sends NEW on every accepted order. The gateway has
+    """Critical: the WS sends NEW on every accepted order. The order_gateway has
     already published OrderAcknowledged from the REST response. Suppress
     the WS one to avoid duplicate events."""
     bus, stream = await _make_user_data_stream(mapper, btc_binance)
     order_id = OrderId(uuid4())
     client_id = ClientOrderId("strat-new-1")
     await bus.subscribe(Topic.ORDERS, stream._on_order_event)
-    # The gateway has already published one ack.
+    # The order_gateway has already published one ack.
     await bus.publish(Topic.ORDERS, OrderAcknowledged(
         ts_event=1, ts_ingest=1, source="binance",
         order_id=order_id, client_order_id=client_id,

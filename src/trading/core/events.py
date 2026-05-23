@@ -189,7 +189,7 @@ class KillSwitchEvent(BaseEvent):
 
 
 class OrderRequest(BaseEvent):
-    """OMS instructing the gateway to place an order."""
+    """OMS instructing the order_gateway to place an order."""
 
     event_type: Literal["order_request"] = "order_request"
     order_id: OrderId
@@ -220,7 +220,7 @@ class AmendRequest(BaseEvent):
     new_price: Price | None = None
 
 
-# --- Gateway responses -----------------------------------------------------
+# --- OrderGateway responses -----------------------------------------------------
 
 
 class OrderAcknowledged(BaseEvent):

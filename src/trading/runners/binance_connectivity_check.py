@@ -6,8 +6,8 @@ import json
 import structlog
 
 from trading.config import load_settings
-from trading.gateways.binance.rest import BinanceREST
-from trading.gateways.binance.ws import BinanceWS
+from trading.order_gateways.binance.rest import BinanceREST
+from trading.order_gateways.binance.ws import BinanceWS
 
 log = structlog.get_logger(__name__)
 

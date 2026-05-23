@@ -1,4 +1,4 @@
-"""Batch 5: BinanceGateway.cancel_stale_orders() startup sync.
+"""Batch 5: BinanceOrderGateway.cancel_stale_orders() startup sync.
 
 Tests use a stub REST client that records calls rather than making real
 network requests.
@@ -12,9 +12,9 @@ from typing import Any
 import pytest
 
 from trading.core import AssetType, Instrument, LiveClock
-from trading.gateways.binance.config import BinanceConfig, BinanceCredentials
-from trading.gateways.binance.gateway import BinanceGateway
-from trading.gateways.binance.symbols import SymbolMapper
+from trading.order_gateways.binance.config import BinanceConfig, BinanceCredentials
+from trading.order_gateways.binance.order_gateway import BinanceOrderGateway
+from trading.order_gateways.binance.symbols import SymbolMapper
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +37,7 @@ class _NullBus:
     async def stop(self): pass
 
 
-def _make_gw(btc_inst, rest_client) -> BinanceGateway:
+def _make_gw(btc_inst, rest_client) -> BinanceOrderGateway:
     cfg = BinanceConfig(
         spot_rest_base="https://testnet.binance.vision",
         spot_ws_base="wss://testnet.binance.vision",
@@ -46,7 +46,7 @@ def _make_gw(btc_inst, rest_client) -> BinanceGateway:
     )
     creds = BinanceCredentials(api_key="k", api_secret="s")
     symbols = SymbolMapper([btc_inst])
-    return BinanceGateway(
+    return BinanceOrderGateway(
         bus=_NullBus(), clock=LiveClock(),
         config=cfg, credentials=creds, symbols=symbols,
         rest_client=rest_client,

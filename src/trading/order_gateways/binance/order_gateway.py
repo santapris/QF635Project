@@ -1,6 +1,6 @@
-"""Binance Spot order gateway.
+"""Binance Spot order order_gateway.
 
-Implements :class:`AbstractGateway`. Subscribes to the ``orders`` topic
+Implements :class:`AbstractOrderGateway`. Subscribes to the ``orders`` topic
 for our outbound :class:`OrderRequest` / :class:`CancelRequest` /
 :class:`AmendRequest` events, translates them to Binance REST calls,
 and publishes the canonical :class:`OrderAcknowledged` / :class:`OrderRejected`
@@ -46,7 +46,7 @@ from ...core.events import (
     OrderRejected,
     OrderRequest,
 )
-from ...core.exceptions import BackpressureError, GatewayError, OrderError
+from ...core.exceptions import BackpressureError, OrderGatewayError, OrderError
 from ...core.types import (
     ClientOrderId,
     ExchangeOrderId,
@@ -55,7 +55,7 @@ from ...core.types import (
     TimeInForce,
 )
 from ...event_bus.base import AbstractEventBus, Topic
-from ..base import AbstractGateway
+from ..base import AbstractOrderGateway
 from .config import BinanceConfig, BinanceCredentials
 from .order_translation import (
     order_type_to_binance,
@@ -76,8 +76,8 @@ _W_CANCEL_ORDER = 1
 _W_OPEN_ORDERS = 6 
 
 
-class BinanceGateway(AbstractGateway):
-    """Order gateway for Binance Spot."""
+class BinanceOrderGateway(AbstractOrderGateway):
+    """Order order_gateway for Binance Spot."""
 
     def __init__(
         self,
@@ -139,7 +139,7 @@ class BinanceGateway(AbstractGateway):
 
     async def _handle_new(self, req: OrderRequest) -> None:
         if req.instrument.exchange != self.venue:
-            return  # different venue's gateway will handle it
+            return  # different venue's order_gateway will handle it
         try:
             params = self._build_order_params(req)
         except OrderError as exc:
@@ -165,14 +165,14 @@ class BinanceGateway(AbstractGateway):
                 venue_code=str(exc.context.get("code", "")),
             )
             return
-        except GatewayError as exc:
+        except OrderGatewayError as exc:
             # Transport / auth / rate-limit. These are *not* order rejections —
             # the order's status is unknown. Publish a rejection with a
             # distinguishing reason so the OMS can surface to a human, but
             # ideally the OMS would retry by client_order_id on rate-limit.
             # For now: reject and log loudly.
             _log.exception("binance_new_order_gateway_error")
-            await self._publish_reject(req, f"gateway error: {exc}")
+            await self._publish_reject(req, f"order_gateway error: {exc}")
             return
 
         # Map exchange ids and publish ack.
@@ -237,7 +237,7 @@ class BinanceGateway(AbstractGateway):
             )
             await self._publish_cancel_rejected(req, exc.message)
             return
-        except GatewayError as exc:
+        except OrderGatewayError as exc:
             _log.exception("binance_cancel_transport_error")
             await self._publish_cancel_rejected(req, f"transport error: {exc}")
             return
@@ -383,7 +383,7 @@ class BinanceGateway(AbstractGateway):
         except BackpressureError as exc:
             self._dropped_events += 1
             _log.critical(
-                "bus_backpressure_gateway_event_dropped",
+                "bus_backpressure_order_gateway_event_dropped",
                 total_drops=self._dropped_events, topic=topic,
                 event_type=type(event).__name__,
             )
@@ -401,4 +401,4 @@ class BinanceGateway(AbstractGateway):
         return format(d.normalize(), "f")
 
 
-__all__ = ["BinanceGateway"]
+__all__ = ["BinanceOrderGateway"]

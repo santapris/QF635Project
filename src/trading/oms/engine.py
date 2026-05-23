@@ -9,15 +9,15 @@ Flow:
 3. On every tick (and periodically), drive each active algo's
    ``next_slice``. When it returns a spec, build an
    :class:`OrderRequest`, publish it on the ``orders`` topic for the
-   gateway.
-4. Subscribe to ``orders`` for gateway responses (ack/reject/cancel)
+   order_gateway.
+4. Subscribe to ``orders`` for order_gateway responses (ack/reject/cancel)
    and to ``fills`` for fill events. Drive the per-order state machine.
 
 Topic discipline:
 
 - **OMS publishes**: ``OrderRequest`` / ``CancelRequest`` / ``AmendRequest``
   on ``orders``.
-- **Gateway publishes**: ``OrderAcknowledged`` / ``OrderRejected`` /
+- **OrderGateway publishes**: ``OrderAcknowledged`` / ``OrderRejected`` /
   ``OrderCancelled`` on ``orders``; ``FillEvent`` on ``fills``.
 - OMS subscribes to both, filters by isinstance. Self-publications are
   ignored naturally.
@@ -157,7 +157,7 @@ class OMSEngine:
 
         # Mint a parent order id solely as an identity for the algo
         # session. Parent orders themselves are never sent to the
-        # gateway; only their children are. The OMS uses the parent id
+        # order_gateway; only their children are. The OMS uses the parent id
         # to group children and cancel the algo wholesale if needed.
         parent_id = OrderId(uuid4())
         self._algos[parent_id] = algo
@@ -168,7 +168,7 @@ class OMSEngine:
         await self._drive_algo(parent_id)
 
     async def _on_order_event(self, event: BaseEvent) -> None:
-        """Handle gateway responses on the orders topic."""
+        """Handle order_gateway responses on the orders topic."""
         if isinstance(event, OrderAcknowledged):
             await self._handle_ack(event)
         elif isinstance(event, OrderRejected):
@@ -214,7 +214,7 @@ class OMSEngine:
                 continue
             await self._drive_algo(parent_id)
 
-    # --- Gateway-response branches ----------------------------------------
+    # --- OrderGateway-response branches ----------------------------------------
 
     async def _handle_ack(self, event: OrderAcknowledged) -> None:
         order = self._orders.get(event.order_id)
@@ -306,7 +306,7 @@ class OMSEngine:
             time_in_force=spec.time_in_force,
         )
         if not await self._safe_publish(Topic.ORDERS, req):
-            # The gateway never received this order. Mark it rejected so the
+            # The order_gateway never received this order. Mark it rejected so the
             # state machine stays consistent and algo cleanup fires correctly.
             order.transition_to(OrderStatus.REJECTED, at_ns=self._clock.now_ns())
             order.reject_reason = "dropped: bus backpressure on orders topic"

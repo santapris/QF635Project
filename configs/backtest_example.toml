@@ -54,7 +54,7 @@ type = "daily_loss_limit"
 [risk.per_strategy."momentum-1".params]
 max_loss = "5000"
 
-[[gateways]]
+[[order_gateways]]
 venue = "SIM"
 type = "backtest"
 maker_bps = 1.0

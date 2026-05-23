@@ -1,4 +1,4 @@
-# Example paper-trading config: market-making strategy on the simulation gateway.
+# Example paper-trading config: market-making strategy on the simulation order_gateway.
 # Run with:
 #   python -m trading.runners.run_live --config configs/paper_example.toml
 #
@@ -53,7 +53,7 @@ type = "throttle"
 max_signals = "100"
 window_seconds = "60"
 
-[[gateways]]
+[[order_gateways]]
 venue = "SIM"
 type = "simulation"
 maker_bps = 1.0

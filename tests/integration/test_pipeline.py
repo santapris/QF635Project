@@ -1,4 +1,4 @@
-"""End-to-end pipeline: signal -> risk -> OMS -> sim gateway -> position."""
+"""End-to-end pipeline: signal -> risk -> OMS -> sim order_gateway -> position."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from trading.core import (
     TimeInForce,
 )
 from trading.event_bus import AsyncioBus, Topic
-from trading.gateways import (
+from trading.order_gateways import (
     FeeModel,
     LatencyModel,
-    SimulationGateway,
-    SimulationGatewayConfig,
+    SimulationOrderGateway,
+    SimulationOrderGatewayConfig,
 )
 from trading.oms import OMSEngine
 from trading.position import AccountingMethod, PositionEngine
@@ -39,9 +39,9 @@ async def test_full_pipeline_executes_signal(clock, btc, strategy_id) -> None:
     )
     oms = OMSEngine(bus=bus, clock=clock)
     pos = PositionEngine(bus=bus, clock=clock, method=AccountingMethod.WAVG)
-    gw = SimulationGateway(
+    gw = SimulationOrderGateway(
         bus=bus, clock=clock,
-        config=SimulationGatewayConfig(
+        config=SimulationOrderGatewayConfig(
             venue="BINANCE",
             latency=LatencyModel(submit_ack_ms=0, fill_ms=0, cancel_ack_ms=0),
             fees=FeeModel(maker_bps=1, taker_bps=5),
@@ -55,7 +55,7 @@ async def test_full_pipeline_executes_signal(clock, btc, strategy_id) -> None:
     await gw.start()
     await bus.start()
     try:
-        # Tick first so the gateway has a book.
+        # Tick first so the order_gateway has a book.
         await bus.publish(Topic.MARKET_DATA, TickEvent(
             ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="md",
             instrument=btc,
@@ -93,9 +93,9 @@ async def test_risk_clamps_oversize_signal(clock, btc, strategy_id) -> None:
     )
     oms = OMSEngine(bus=bus, clock=clock)
     pos = PositionEngine(bus=bus, clock=clock)
-    gw = SimulationGateway(
+    gw = SimulationOrderGateway(
         bus=bus, clock=clock,
-        config=SimulationGatewayConfig(
+        config=SimulationOrderGatewayConfig(
             venue="BINANCE", seed=1,
             latency=LatencyModel(submit_ack_ms=0, fill_ms=0, cancel_ack_ms=0),
         ),

@@ -103,8 +103,8 @@ class PositionSpec(BaseModel):
     mark_to_market_interval_seconds: float = 5.0
 
 
-class SimGatewaySpec(BaseModel):
-    """Simulation or backtest gateway (no real exchange connection)."""
+class SimOrderGatewaySpec(BaseModel):
+    """Simulation or backtest order_gateway (no real exchange connection)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -122,8 +122,8 @@ class SimGatewaySpec(BaseModel):
     seed: int | None = None
 
 
-class BinanceGatewaySpec(BaseModel):
-    """Real Binance Spot gateway.
+class BinanceOrderGatewaySpec(BaseModel):
+    """Real Binance Spot order_gateway.
 
     API credentials are read from the environment — never from TOML.
     Set ``BINANCE_TESTNET_API_KEY`` / ``BINANCE_TESTNET_API_SECRET`` for testnet,
@@ -140,8 +140,8 @@ class BinanceGatewaySpec(BaseModel):
 
 
 # Discriminated union — Pydantic selects the right model via the ``type`` field.
-GatewaySpec = Annotated[
-    Union[SimGatewaySpec, BinanceGatewaySpec],
+OrderGatewaySpec = Annotated[
+    Union[SimOrderGatewaySpec, BinanceOrderGatewaySpec],
     Field(discriminator="type"),
 ]
 
@@ -169,22 +169,22 @@ class AppConfig(BaseModel):
     risk: RiskSpec = Field(default_factory=RiskSpec)
     oms: OMSSpec = Field(default_factory=OMSSpec)
     position: PositionSpec = Field(default_factory=PositionSpec)
-    gateways: list[GatewaySpec] = Field(default_factory=list)
+    order_gateways: list[OrderGatewaySpec] = Field(default_factory=list)
     backtest: BacktestSpec | None = None
 
 
 __all__ = [
     "AppConfig",
     "BacktestSpec",
-    "BinanceGatewaySpec",
+    "BinanceOrderGatewaySpec",
     "BusBackend",
     "BusConfig",
     "FeedHandlerSpec",
-    "GatewaySpec",
+    "OrderGatewaySpec",
     "OMSSpec",
     "PositionSpec",
     "RiskSpec",
     "RuleSpec",
-    "SimGatewaySpec",
+    "SimOrderGatewaySpec",
     "StrategySpec",
 ]

@@ -1,7 +1,7 @@
 """Order-type and side translation between our schema and Binance.
 
 Our :class:`OrderType` enum uses generic names; Binance uses its own
-strings. Keep the translation here so the gateway code doesn't sprinkle
+strings. Keep the translation here so the order_gateway code doesn't sprinkle
 ``if order_type is ...`` chains everywhere.
 
 Binance Spot order types: ``LIMIT``, ``MARKET``, ``STOP_LOSS``,

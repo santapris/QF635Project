@@ -3,7 +3,7 @@
 from .config import BinanceConfig, BinanceCredentials
 from .depth_book import DepthBookManager
 from .errors import BinanceErrorResponse, translate_error
-from .gateway import BinanceGateway
+from .order_gateway import BinanceOrderGateway
 from .listen_key import ListenKeyManager
 from .public_ws import BinancePublicWSConnector
 from .reconciler import BalanceReconciler
@@ -16,7 +16,7 @@ __all__ = [
     "BinanceConfig",
     "BinanceCredentials",
     "BinanceErrorResponse",
-    "BinanceGateway",
+    "BinanceOrderGateway",
     "BinancePublicWSConnector",
     "BinanceRESTClient",
     "BinanceUserDataStream",

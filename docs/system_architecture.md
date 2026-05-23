@@ -39,14 +39,14 @@ The platform follows a **layered event-driven architecture** where every state t
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         EXTERNAL WORLD                                  │
-│    Exchange WebSocket APIs    REST APIs    FIX Gateways    Data Vendors │
+│    Exchange WebSocket APIs    REST APIs    FIX OrderGateways    Data Vendors │
 └─────────────────────┬───────────────────────────────────┬───────────────┘
                       │ raw market data                   │ order responses
                       ▼                                   ▲
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      INGESTION / GATEWAY LAYER                          │
 │  ┌──────────────────┐  ┌───────────────────┐  ┌──────────────────────┐  │
-│  │   Feed Handler   │  │  Exchange Gateway │  │  Broker Gateway      │  │
+│  │   Feed Handler   │  │  Exchange OrderGateway │  │  Broker OrderGateway      │  │
 │  │  (normalisation) │  │  (order routing)  │  │  (FIX/REST adapter)  │  │
 │  └────────┬─────────┘  └────────┬──────────┘  └──────────┬───────────┘  │
 └───────────┼─────────────────────┼────────────────────────┼──────────────┘
@@ -83,8 +83,8 @@ The platform follows a **layered event-driven architecture** where every state t
 5.  Risk Engine        ◀──   EVENT BUS (subscribe: signals + positions)
 6.  Risk Engine         ──▶  EVENT BUS (topic: risk-decisions)
 7.  OMS                ◀──   EVENT BUS (subscribe: risk-decisions)
-8.  OMS                 ──▶  Exchange Gateway  ──▶  Exchange
-9.  Exchange           ──▶  Exchange Gateway   ──▶  EVENT BUS (topic: fills)
+8.  OMS                 ──▶  Exchange OrderGateway  ──▶  Exchange
+9.  Exchange           ──▶  Exchange OrderGateway   ──▶  EVENT BUS (topic: fills)
 10. Position Engine    ◀──   EVENT BUS (subscribe: fills)
 11. Position Engine     ──▶  EVENT BUS (topic: positions)
 12. Risk Engine        ◀──   EVENT BUS (subscribe: positions)  [feedback loop]
@@ -102,7 +102,7 @@ The platform follows a **layered event-driven architecture** where every state t
 7.  Position Engine (unchanged)   ◀──   simulated EVENT BUS
 ```
 
-> **Key invariant**: Strategy, Risk, and Position engines are **identical** in live and backtest modes. Only the bus implementation and exchange gateway differ.
+> **Key invariant**: Strategy, Risk, and Position engines are **identical** in live and backtest modes. Only the bus implementation and exchange order_gateway differ.
 
 ### 1.4 Concurrency Model
 
@@ -151,7 +151,7 @@ feed_handler/
 
 ---
 
-### 2.2 Exchange / Broker Gateways
+### 2.2 Exchange / Broker OrderGateways
 
 **Responsibilities**
 - Translate internal `OrderRequest` events into exchange-specific API calls
@@ -163,9 +163,9 @@ feed_handler/
 **Inputs**: `OrderRequest`, `CancelRequest`, `AmendRequest`  
 **Outputs**: `OrderAcknowledged`, `FillEvent`, `OrderCancelled`, `OrderRejected`
 
-**Supported Gateway Types**
+**Supported OrderGateway Types**
 
-| Gateway Type    | Protocol        | Latency Profile |
+| OrderGateway Type    | Protocol        | Latency Profile |
 |-----------------|-----------------|-----------------|
 | Direct Exchange | WebSocket / FIX | Ultra-low       |
 | Prime Broker    | FIX 4.2/4.4     | Low             |
@@ -175,16 +175,16 @@ feed_handler/
 **Internal Modules**
 
 ```
-gateways/
-├── base.py             # AbstractGateway interface
+order_gateways/
+├── base.py             # AbstractOrderGateway interface
 ├── binance/
 │   ├── auth.py
-│   ├── ws_gateway.py
-│   └── rest_gateway.py
+│   ├── ws_order_gateway.py
+│   └── rest_order_gateway.py
 ├── interactive_brokers/
-│   └── fix_gateway.py
+│   └── fix_order_gateway.py
 └── simulation/
-    └── simulated_gateway.py
+    └── simulated_order_gateway.py
 ```
 
 **Failure Handling**
@@ -219,8 +219,8 @@ class AbstractEventBus(Protocol):
 | `market-data`   | Feed Handler           | Strategy, Risk, Position         |
 | `signals`       | Strategy Engine        | Risk Engine                      |
 | `risk-decisions`| Risk Engine            | OMS                              |
-| `orders`        | OMS                    | Exchange Gateway, Monitoring     |
-| `fills`         | Exchange Gateway       | OMS, Position Engine, Monitoring |
+| `orders`        | OMS                    | Exchange OrderGateway, Monitoring     |
+| `fills`         | Exchange OrderGateway       | OMS, Position Engine, Monitoring |
 | `positions`     | Position Engine        | Risk Engine, Dashboard           |
 | `alerts`        | Risk, Feed, OMS        | Monitoring, Dashboard            |
 
@@ -370,7 +370,7 @@ position/
 - Receive approved `RiskDecision` events and convert to exchange orders
 - Maintain a lifecycle state machine for every order
 - Track partial fills and aggregate fill quantities
-- Route orders to the correct exchange gateway
+- Route orders to the correct exchange order_gateway
 - Support order types: market, limit, stop-limit, IOC, FOK, TWAP, VWAP
 
 **Order State Machine**
@@ -393,7 +393,7 @@ ACKNOWLEDGED ───────────────▶ REJECTED
 ```
 oms/
 ├── engine.py           # Order lifecycle management
-├── router.py           # Order routing to correct gateway
+├── router.py           # Order routing to correct order_gateway
 ├── state_machine.py    # Order FSM transitions
 ├── execution_algos/    # TWAP, VWAP, Iceberg, Sniper
 │   ├── base.py
@@ -559,7 +559,7 @@ Stateful services must handle restart gracefully by replaying recent events from
 
 ### 3.7 Reproducibility: Backtest ↔ Live
 
-The codebase enforces a strict rule: strategy logic files live in `strategy/` and are imported by both the live runner and the backtest runner. There is no "backtest version" of a strategy. The only difference is the runtime adapter (live bus vs simulated bus, real gateway vs simulated gateway).
+The codebase enforces a strict rule: strategy logic files live in `strategy/` and are imported by both the live runner and the backtest runner. There is no "backtest version" of a strategy. The only difference is the runtime adapter (live bus vs simulated bus, real order_gateway vs simulated order_gateway).
 
 ---
 
@@ -661,7 +661,7 @@ trading-platform/
 │       │       ├── binance.py
 │       │       └── coinbase.py
 │       │
-│       ├── gateways/           # Exchange/broker order gateways
+│       ├── order_gateways/           # Exchange/broker order order_gateways
 │       │   ├── base.py
 │       │   ├── binance/
 │       │   ├── interactive_brokers/
@@ -722,7 +722,7 @@ trading-platform/
 │   │   └── test_pnl_calculator.py
 │   ├── integration/            # Component interactions, in-memory bus
 │   │   ├── test_strategy_risk_flow.py
-│   │   └── test_oms_gateway_flow.py
+│   │   └── test_oms_order_gateway_flow.py
 │   ├── system/                 # Full backtest runs
 │   │   └── test_backtest_e2e.py
 │   └── conftest.py             # Shared fixtures
@@ -753,7 +753,7 @@ trading-platform/
 
 **Key structural rules:**
 - `core/` has zero external dependencies — only stdlib + pydantic
-- `strategy/` must never import from `risk/`, `oms/`, or `gateways/` directly
+- `strategy/` must never import from `risk/`, `oms/`, or `order_gateways/` directly
 - `notebooks/` is never imported by `src/` (enforced by ruff rule)
 - Each subdirectory under `src/trading/` can evolve into its own microservice package
 
@@ -965,7 +965,7 @@ async def main():
     risk_engine = RiskEngine(bus, clock, risk_config)
     position_engine = PositionEngine(bus, clock)
     oms = OrderManagementSystem(bus, clock)
-    gateway = BinanceGateway(bus, clock, api_key, api_secret)
+    order_gateway = BinanceOrderGateway(bus, clock, api_key, api_secret)
 
     # Wire up subscriptions
     await bus.subscribe("market-data", strategy.on_event)
@@ -973,7 +973,7 @@ async def main():
     await bus.subscribe("risk-decisions", oms.on_event)
     await bus.subscribe("fills", position_engine.on_event)
     await bus.subscribe("fills", oms.on_event)
-    await bus.subscribe("orders", gateway.on_event)
+    await bus.subscribe("orders", order_gateway.on_event)
     await bus.subscribe("positions", risk_engine.on_position_update)
 
     # Start all components as concurrent tasks
@@ -983,7 +983,7 @@ async def main():
         tg.create_task(risk_engine.run())
         tg.create_task(position_engine.run())
         tg.create_task(oms.run())
-        tg.create_task(gateway.run())
+        tg.create_task(order_gateway.run())
 
 asyncio.run(main())
 ```
@@ -1307,7 +1307,7 @@ Order submit → Exchange ack:       target < 10ms (network dependent)
 - `strategy/examples/momentum.py` — basic signal logic
 - `risk/` — minimal position limit rule only
 - `oms/engine.py` — order lifecycle (paper only)
-- `gateways/simulation/` — simulated gateway
+- `order_gateways/simulation/` — simulated order_gateway
 - `runners/live_runner.py` — wires everything together
 - Console logging only
 
@@ -1322,12 +1322,12 @@ Order submit → Exchange ack:       target < 10ms (network dependent)
 **Objectives**: Connect to a real exchange in paper trading mode
 
 **Architecture Decisions**:
-- Add `gateways/binance/` with testnet support
+- Add `order_gateways/binance/` with testnet support
 - Implement WebSocket reconnect with backoff
 - Add order signing and authentication
 
 **Deliverables**:
-- `gateways/binance/ws_gateway.py`
+- `order_gateways/binance/ws_order_gateway.py`
 - `feed_handler/connectors/` — production-quality with reconnect
 - Integration tests against Binance testnet
 - Basic structlog logging
@@ -1660,7 +1660,7 @@ tests/
 **Fixtures philosophy**:
 - Use `pytest-asyncio` for all async tests
 - Factory functions over fixtures for event objects
-- Shared `conftest.py` provides: `memory_bus`, `simulated_clock`, `mock_gateway`
+- Shared `conftest.py` provides: `memory_bus`, `simulated_clock`, `mock_order_gateway`
 
 ### 13.4 Configuration Management
 
@@ -1793,8 +1793,8 @@ Strategy computation:             <1ms
 Strategy → Risk Engine:           <50µs
 Risk evaluation:                  <500µs
 Risk → OMS:                       <50µs
-OMS → Exchange Gateway:           <100µs
-Exchange Gateway → Exchange:      ~1–5ms   (network)
+OMS → Exchange OrderGateway:           <100µs
+Exchange OrderGateway → Exchange:      ~1–5ms   (network)
 ──────────────────────────────────────────
 Total round-trip (excl. network): ~3ms
 Total end-to-end (incl. network): ~10–20ms

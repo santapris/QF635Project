@@ -1,8 +1,8 @@
-"""Backtest replay engine, gateway, and reporting."""
+"""Backtest replay engine, order_gateway, and reporting."""
 
 from .data_source import CSVColumns, CSVDataSource, DataSource, InMemoryDataSource
 from .engine import BacktestConfig, BacktestEngine
-from .gateway import BacktestGateway
+from .order_gateway import BacktestOrderGateway
 from .metrics import (
     PerformanceMetrics,
     compute_metrics,
@@ -17,7 +17,7 @@ from .report import BacktestReport, EquityPoint
 __all__ = [
     "BacktestConfig",
     "BacktestEngine",
-    "BacktestGateway",
+    "BacktestOrderGateway",
     "BacktestReport",
     "CSVColumns",
     "CSVDataSource",

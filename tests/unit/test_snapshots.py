@@ -192,7 +192,7 @@ def test_live_app_metrics_snapshot_keys() -> None:
             "tick_size": "0.01", "lot_size": "0.00001",
         }],
         "bus": {"backend": "memory"},
-        "gateways": [{"venue": "BINANCE", "type": "simulation"}],
+        "order_gateways": [{"venue": "BINANCE", "type": "simulation"}],
     }
     cfg = load_config_from_dict(raw)
     app = build_live_app(cfg)
@@ -201,7 +201,7 @@ def test_live_app_metrics_snapshot_keys() -> None:
     assert "oms" in snap
     assert "risk" in snap
     assert "position" in snap
-    assert "gateways" in snap
+    assert "order_gateways" in snap
 
 
 def test_live_app_metrics_snapshot_oms_structure() -> None:
@@ -214,7 +214,7 @@ def test_live_app_metrics_snapshot_oms_structure() -> None:
             "tick_size": "0.01", "lot_size": "0.00001",
         }],
         "bus": {"backend": "memory"},
-        "gateways": [{"venue": "BINANCE", "type": "simulation"}],
+        "order_gateways": [{"venue": "BINANCE", "type": "simulation"}],
     }
     cfg = load_config_from_dict(raw)
     app = build_live_app(cfg)

@@ -10,19 +10,19 @@ import pytest
 
 from trading.core.clock import LiveClock
 from trading.core.exceptions import (
-    GatewayAuthError,
-    GatewayError,
+    OrderGatewayAuthError,
+    OrderGatewayError,
     OrderError,
     RateLimitedError,
 )
-from trading.gateways.binance import (
+from trading.order_gateways.binance import (
     BinanceConfig,
     BinanceCredentials,
     BinanceErrorResponse,
     BinanceRESTClient,
     translate_error,
 )
-from trading.gateways.binance.signing import encode_query, sign
+from trading.order_gateways.binance.signing import encode_query, sign
 
 
 # =====================================================================
@@ -101,7 +101,7 @@ def test_error_invalid_signature_is_auth():
     err = BinanceErrorResponse(code=-1022, msg="Signature for this request is not valid.")
     assert err.is_auth_error
     exc = translate_error(err)
-    assert isinstance(exc, GatewayAuthError)
+    assert isinstance(exc, OrderGatewayAuthError)
 
 
 def test_error_insufficient_balance_is_logical():
@@ -109,7 +109,7 @@ def test_error_insufficient_balance_is_logical():
     assert err.is_logical_reject
     exc = translate_error(err)
     assert isinstance(exc, OrderError)
-    # The marker tells the gateway to publish OrderRejected event rather
+    # The marker tells the order_gateway to publish OrderRejected event rather
     # than retry.
     assert exc.context.get("logical_reject") is True
 
@@ -337,7 +337,7 @@ async def test_rest_client_refuses_signed_without_creds():
     session.close = AsyncMock()
     with patch.object(__import__("aiohttp"), "ClientSession", return_value=session):
         await client.connect()
-        with pytest.raises(GatewayError, match="credentials"):
+        with pytest.raises(OrderGatewayError, match="credentials"):
             await client.request("POST", "/api/v3/order", signed=True)
         await client.close()
 
@@ -362,5 +362,5 @@ async def test_rest_client_rejects_large_clock_drift():
     session.close = AsyncMock()
 
     with patch.object(__import__("aiohttp"), "ClientSession", return_value=session):
-        with pytest.raises(GatewayError, match="server time disagrees"):
+        with pytest.raises(OrderGatewayError, match="server time disagrees"):
             await client.connect()

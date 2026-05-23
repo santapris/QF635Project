@@ -1,8 +1,8 @@
 """Order — the OMS's internal, mutable view of one outstanding order.
 
 Distinct from :class:`OrderRequest` (the *intent* event sent to the
-gateway) and :class:`FillEvent` (the *result* event from the gateway).
-The Order object lives in the OMS, gets mutated as gateway responses
+order_gateway) and :class:`FillEvent` (the *result* event from the order_gateway).
+The Order object lives in the OMS, gets mutated as order_gateway responses
 flow in, and is never published on the bus — it's internal state.
 
 Every mutation goes through :meth:`transition_to` so the state machine
@@ -59,7 +59,7 @@ class Order:
     # None means this order was issued directly (immediate routing).
     parent_order_id: OrderId | None = None
 
-    # Fill ids we've already applied, so a duplicate fill from the gateway
+    # Fill ids we've already applied, so a duplicate fill from the order_gateway
     # is detected rather than double-counted.
     _applied_fills: set[str] = field(default_factory=set)
 

@@ -160,10 +160,10 @@ def test_user_data_stream_requires_lookup(btc_inst, clock) -> None:
     except ImportError:
         pytest.skip("websockets not installed")
 
-    from trading.gateways.binance.config import BinanceConfig
-    from trading.gateways.binance.listen_key import ListenKeyManager
-    from trading.gateways.binance.symbols import SymbolMapper
-    from trading.gateways.binance.user_data import BinanceUserDataStream
+    from trading.order_gateways.binance.config import BinanceConfig
+    from trading.order_gateways.binance.listen_key import ListenKeyManager
+    from trading.order_gateways.binance.symbols import SymbolMapper
+    from trading.order_gateways.binance.user_data import BinanceUserDataStream
 
     # Confirm the parameter has no default (required).
     sig = inspect.signature(BinanceUserDataStream.__init__)
@@ -175,7 +175,7 @@ def test_user_data_stream_requires_lookup(btc_inst, clock) -> None:
 
 def test_user_data_stream_lookup_type_annotation(btc_inst, clock) -> None:
     """strategy_id_lookup annotation should be Callable, not untyped."""
-    from trading.gateways.binance.user_data import BinanceUserDataStream
+    from trading.order_gateways.binance.user_data import BinanceUserDataStream
 
     sig = inspect.signature(BinanceUserDataStream.__init__)
     param = sig.parameters["strategy_id_lookup"]
@@ -199,10 +199,10 @@ async def test_user_data_stream_stamps_strategy_id(btc_inst, clock) -> None:
 
     import json
     from trading.core.types import ExchangeOrderId, OrderId
-    from trading.gateways.binance.config import BinanceConfig
-    from trading.gateways.binance.listen_key import ListenKeyManager
-    from trading.gateways.binance.symbols import SymbolMapper
-    from trading.gateways.binance.user_data import BinanceUserDataStream
+    from trading.order_gateways.binance.config import BinanceConfig
+    from trading.order_gateways.binance.listen_key import ListenKeyManager
+    from trading.order_gateways.binance.symbols import SymbolMapper
+    from trading.order_gateways.binance.user_data import BinanceUserDataStream
     from trading.event_bus.base import Topic
 
     expected_strategy = StrategyId("my-strategy")
@@ -295,9 +295,9 @@ async def test_user_data_stream_unknown_fallback(btc_inst, clock) -> None:
 
     import asyncio
     from trading.core.types import ExchangeOrderId, OrderId
-    from trading.gateways.binance.config import BinanceConfig
-    from trading.gateways.binance.symbols import SymbolMapper
-    from trading.gateways.binance.user_data import BinanceUserDataStream
+    from trading.order_gateways.binance.config import BinanceConfig
+    from trading.order_gateways.binance.symbols import SymbolMapper
+    from trading.order_gateways.binance.user_data import BinanceUserDataStream
     from trading.event_bus.base import Topic
 
     published: list = []

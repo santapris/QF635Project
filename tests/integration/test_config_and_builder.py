@@ -50,7 +50,7 @@ def _config_dict(tmp_path: Path) -> dict:
                 ],
             },
         },
-        "gateways": [{
+        "order_gateways": [{
             "venue": "SIM", "type": "backtest",
             "submit_ack_ms": 0.0, "cancel_ack_ms": 0.0, "fill_ms": 0.0,
             "seed": 1,
@@ -102,14 +102,14 @@ def test_env_overrides_apply(tmp_path, monkeypatch) -> None:
 
 def test_build_live_app_constructs_components(tmp_path) -> None:
     raw = _config_dict(tmp_path)
-    # The live builder needs at least one simulation gateway, not backtest.
-    raw["gateways"][0]["type"] = "simulation"
+    # The live builder needs at least one simulation order_gateway, not backtest.
+    raw["order_gateways"][0]["type"] = "simulation"
     cfg = load_config_from_dict(raw)
     app = build_live_app(cfg)
     assert app.position_engine is not None
     assert app.risk_engine is not None
     assert app.oms_engine is not None
-    assert len(app.gateways) == 1
+    assert len(app.order_gateways) == 1
     assert app.strategy_registry is not None
 
 

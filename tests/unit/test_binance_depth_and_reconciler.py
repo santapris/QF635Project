@@ -22,7 +22,7 @@ from trading.core import (
 )
 from trading.core.exceptions import SequenceGapError
 from trading.event_bus import MemoryBus, Topic
-from trading.gateways.binance import (
+from trading.order_gateways.binance import (
     BalanceReconciler,
     BinanceConfig,
     DepthBookManager,

@@ -4,10 +4,10 @@ The replay loop:
 
 1. Pull next event from the data source.
 2. Advance the :class:`SimulatedClock` to ``event.ts_event``.
-3. Drain any gateway-scheduled events whose due time is now <= clock.
+3. Drain any order_gateway-scheduled events whose due time is now <= clock.
 4. Publish the data event onto the bus.
 5. Run all bus subscribers to quiescence (let chains of events settle).
-6. Drain any *new* gateway-scheduled events that fired as a result.
+6. Drain any *new* order_gateway-scheduled events that fired as a result.
 7. Sample equity if it's a snapshot interval.
 8. Loop.
 
@@ -35,7 +35,7 @@ from ..event_bus.asyncio_bus import AsyncioBus
 from ..event_bus.base import AbstractEventBus, Topic
 from ..position.engine import PositionEngine
 from .data_source import DataSource
-from .gateway import BacktestGateway
+from .order_gateway import BacktestOrderGateway
 from .report import BacktestReport
 
 _log = structlog.get_logger(__name__)
@@ -51,7 +51,7 @@ class BacktestConfig:
     settle_iterations: int = 4
     """How many ``await asyncio.sleep(0)`` cycles to run after each publish.
     Higher = more chains-of-events processed per step. 4 is typically enough
-    for a 5-deep pipeline (data -> strategy -> risk -> oms -> gateway)."""
+    for a 5-deep pipeline (data -> strategy -> risk -> oms -> order_gateway)."""
 
     initial_equity: float = 0.0
     """Starting equity for total_return/drawdown calculations."""
@@ -69,14 +69,14 @@ class BacktestEngine:
         clock: SimulatedClock,
         bus: AsyncioBus,
         data_source: DataSource,
-        gateway: BacktestGateway,
+        order_gateway: BacktestOrderGateway,
         position_engine: PositionEngine,
         config: BacktestConfig | None = None,
     ) -> None:
         self._clock = clock
         self._bus = bus
         self._data_source = data_source
-        self._gateway = gateway
+        self._order_gateway = order_gateway
         self._position_engine = position_engine
         self._cfg = config or BacktestConfig()
 
@@ -103,7 +103,7 @@ class BacktestEngine:
         try:
             await self._replay_loop()
             # After data is exhausted, drain any pending scheduled
-            # gateway events (final fills, late cancels, etc.).
+            # order_gateway events (final fills, late cancels, etc.).
             await self._drain_remaining()
             # Final mark-to-market for any still-open positions.
             await self._position_engine.mark_to_market_all()
@@ -126,7 +126,7 @@ class BacktestEngine:
         async for event in self._data_source:
             # Step 1-2: advance clock to event time.
             # The data source can be slightly out of order vs scheduled
-            # gateway events; we drain the gateway's heap up to (but not
+            # order_gateway events; we drain the order_gateway's heap up to (but not
             # past) the new event's timestamp first.
             await self._drain_up_to(event.ts_event)
             self._clock.set_time(event.ts_event)
@@ -137,32 +137,32 @@ class BacktestEngine:
                 await self._bus.publish(topic, event)
                 await self._settle()
 
-            # Step 5: drain any gateway events that fired as a result.
-            while await self._gateway.drain_due() > 0:
+            # Step 5: drain any order_gateway events that fired as a result.
+            while await self._order_gateway.drain_due() > 0:
                 await self._settle()
 
             # Step 6: equity snapshot if due.
             await self._maybe_snapshot()
 
     async def _drain_up_to(self, target_ns: int) -> None:
-        """Drain gateway events whose due time falls between now and ``target_ns``."""
+        """Drain order_gateway events whose due time falls between now and ``target_ns``."""
         while True:
-            due = self._gateway.next_due_ns()
+            due = self._order_gateway.next_due_ns()
             if due is None or due > target_ns:
                 return
             self._clock.set_time(due)
-            await self._gateway.drain_due()
+            await self._order_gateway.drain_due()
             await self._settle()
 
     async def _drain_remaining(self) -> None:
-        """At end-of-data, fast-forward through any tail-end gateway events."""
+        """At end-of-data, fast-forward through any tail-end order_gateway events."""
         while True:
-            due = self._gateway.next_due_ns()
+            due = self._order_gateway.next_due_ns()
             if due is None:
                 return
             if due > self._clock.now_ns():
                 self._clock.set_time(due)
-            await self._gateway.drain_due()
+            await self._order_gateway.drain_due()
             await self._settle()
 
     async def _maybe_snapshot(self) -> None:

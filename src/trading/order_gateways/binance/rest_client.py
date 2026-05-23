@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover
     aiohttp = None  # type: ignore[assignment]
 
 from ...core.clock import Clock
-from ...core.exceptions import GatewayError
+from ...core.exceptions import OrderGatewayError
 from ..rate_limiter import RateLimiter
 from .config import BinanceConfig, BinanceCredentials
 from .errors import BinanceErrorResponse, translate_error
@@ -130,7 +130,7 @@ class BinanceRESTClient:
         server_ms = int(data["serverTime"])
         offset = server_ms - local_mid
         if abs(offset) > self._config.max_clock_drift_ms:
-            raise GatewayError(
+            raise OrderGatewayError(
                 "Binance server time disagrees with local clock by "
                 f"{offset}ms (threshold {self._config.max_clock_drift_ms}ms). "
                 "Check NTP synchronization.",
@@ -164,12 +164,12 @@ class BinanceRESTClient:
 
         Raises one of:
         - :class:`RateLimitedError` on 418/429
-        - :class:`GatewayAuthError` on auth failures
+        - :class:`OrderGatewayAuthError` on auth failures
         - :class:`OrderError` on order-related rejections
-        - :class:`GatewayError` for everything else
+        - :class:`OrderGatewayError` for everything else
         """
         if not self._connected:
-            raise GatewayError("REST client not connected; call connect() first")
+            raise OrderGatewayError("REST client not connected; call connect() first")
 
         # Reserve rate-limit tokens before sending. Blocks if needed.
         await self._rate_limiter.acquire(cost=weight)
@@ -180,7 +180,7 @@ class BinanceRESTClient:
 
         if signed:
             if self._creds is None:
-                raise GatewayError("signed request requires credentials")
+                raise OrderGatewayError("signed request requires credentials")
             all_params["timestamp"] = self._now_ms_for_binance()
             all_params["recvWindow"] = self._config.recv_window_ms
             signature = sign(all_params, self._creds.api_secret)
@@ -188,7 +188,7 @@ class BinanceRESTClient:
             headers["X-MBX-APIKEY"] = self._creds.api_key
         elif user_data:
             if self._creds is None:
-                raise GatewayError("user_data request requires credentials")
+                raise OrderGatewayError("user_data request requires credentials")
             headers["X-MBX-APIKEY"] = self._creds.api_key
 
         url = self._config.rest_base_url + path
@@ -219,7 +219,7 @@ class BinanceRESTClient:
                     payload = await resp.json()
                 except Exception:
                     text = await resp.text()
-                    raise GatewayError(
+                    raise OrderGatewayError(
                         f"binance non-JSON response: {text[:200]}",
                         http_status=resp.status,
                     )
@@ -232,7 +232,7 @@ class BinanceRESTClient:
                     raise translate_error(err, retry_after=retry_after)
                 return payload
         except aiohttp.ClientError as exc:
-            raise GatewayError(f"binance transport error: {exc}") from exc
+            raise OrderGatewayError(f"binance transport error: {exc}") from exc
 
     @staticmethod
     def _parse_retry_after(value: str | None) -> float | None:

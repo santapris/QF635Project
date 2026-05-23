@@ -7,7 +7,7 @@ End-to-end wiring:
 - Risk engine + per-strategy rules.
 - OMS.
 - Position engine.
-- :class:`BinanceGateway` for order entry/cancel.
+- :class:`BinanceOrderGateway` for order entry/cancel.
 - :class:`ListenKeyManager` + :class:`BinanceUserDataStream` for the
   fill feedback loop.
 - :class:`BalanceReconciler` for the safety net.
@@ -41,18 +41,18 @@ from trading.core import AssetType, Instrument, LiveClock, StrategyId
 from trading.event_bus import AsyncioBus, Topic
 from trading.feed_handler import FeedHandler, FeedHandlerConfig
 from trading.feed_handler.normalizers import BinanceNormalizer
-from trading.gateways.binance import (
+from trading.order_gateways.binance import (
     BalanceReconciler,
     BinanceConfig,
     BinanceCredentials,
-    BinanceGateway,
+    BinanceOrderGateway,
     BinancePublicWSConnector,
     BinanceRESTClient,
     BinanceUserDataStream,
     ListenKeyManager,
     SymbolMapper,
 )
-from trading.gateways.binance import stream_names
+from trading.order_gateways.binance import stream_names
 from trading.oms import OMSEngine
 from trading.position import AccountingMethod, EnginePortfolioView, PositionEngine
 from trading.risk import RiskEngine
@@ -103,7 +103,7 @@ async def _amain(args: argparse.Namespace) -> int:
     # --- Bus ----------------------------------------------------------
     bus = AsyncioBus(queue_size=10_000)
 
-    # --- REST client (shared by gateway, listen-key, user-data, reconciler)
+    # --- REST client (shared by order_gateway, listen-key, user-data, reconciler)
     rest = BinanceRESTClient(config=config, credentials=credentials, clock=clock)
 
     # --- Core engines -------------------------------------------------
@@ -133,8 +133,8 @@ async def _amain(args: argparse.Namespace) -> int:
         parameters={"target_quantity": "0.0001"},  # very small for testnet
     )
 
-    # --- Gateway ------------------------------------------------------
-    gateway = BinanceGateway(
+    # --- OrderGateway ------------------------------------------------------
+    order_gateway = BinanceOrderGateway(
         bus=bus, clock=clock, config=config, credentials=credentials,
         symbols=symbols, rest_client=rest,
     )
@@ -181,7 +181,7 @@ async def _amain(args: argparse.Namespace) -> int:
     await risk.start()
     await oms.start()
     await rest.connect()
-    await gateway.start()
+    await order_gateway.start()
     await strategies.start()
     await listen_keys.start()
     await user_data.start()
@@ -216,7 +216,7 @@ async def _amain(args: argparse.Namespace) -> int:
         await user_data.stop()
         await listen_keys.stop()
         await strategies.stop()
-        await gateway.stop()
+        await order_gateway.stop()
         await rest.close()
         await oms.stop()
         await risk.stop()

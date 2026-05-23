@@ -14,7 +14,7 @@ from trading.core import (
     StrategyId,
 )
 from trading.event_bus import MemoryBus
-from trading.gateways.binance.config import BinanceConfig, BinanceCredentials
+from trading.order_gateways.binance.config import BinanceConfig, BinanceCredentials
 from trading.logging import configure_logging
 
 

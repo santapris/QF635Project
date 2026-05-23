@@ -7,15 +7,15 @@ that would otherwise be duplicated across runners.
 Two builders:
 
 - :func:`build_live_app` — production wiring: real bus, simulation or real
-  gateway, strategy registry, full risk/OMS/position pipeline. The default
+  order_gateway, strategy registry, full risk/OMS/position pipeline. The default
   for paper trading and (with real exchange adapters in place) live trading.
 
 - :func:`build_backtest_app` — same components, plus the backtest engine
   driving everything from a :class:`SimulatedClock`.
 
-The builders are explicit about *which* gateway flavour they use. Live
-needs :class:`SimulationGateway` (asyncio-sleep latency). Backtest needs
-:class:`BacktestGateway` (time-jumping). They share configuration.
+The builders are explicit about *which* order_gateway flavour they use. Live
+needs :class:`SimulationOrderGateway` (asyncio-sleep latency). Backtest needs
+:class:`BacktestOrderGateway` (time-jumping). They share configuration.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from typing import Any
 from ..backtest import (
     BacktestConfig,
     BacktestEngine,
-    BacktestGateway,
+    BacktestOrderGateway,
     CSVColumns,
     CSVDataSource,
 )
@@ -37,22 +37,22 @@ from ..core.exceptions import ConfigError
 from ..core.instruments import Instrument
 from ..event_bus import AsyncioBus, MemoryBus
 from ..event_bus.base import AbstractEventBus
-from ..gateways import (
-    AbstractGateway,
+from ..order_gateways import (
+    AbstractOrderGateway,
     FeeModel,
     FillModel,
     LatencyModel,
     RejectModel,
-    SimulationGateway,
-    SimulationGatewayConfig,
+    SimulationOrderGateway,
+    SimulationOrderGatewayConfig,
 )
-from ..gateways.binance.config import BinanceConfig, BinanceCredentials
-from ..gateways.binance.gateway import BinanceGateway
-from ..gateways.binance.listen_key import ListenKeyManager
-from ..gateways.binance.reconciler import BalanceReconciler
-from ..gateways.binance.rest_client import BinanceRESTClient
-from ..gateways.binance.symbols import SymbolMapper
-from ..gateways.binance.user_data import BinanceUserDataStream
+from ..order_gateways.binance.config import BinanceConfig, BinanceCredentials
+from ..order_gateways.binance.order_gateway import BinanceOrderGateway
+from ..order_gateways.binance.listen_key import ListenKeyManager
+from ..order_gateways.binance.reconciler import BalanceReconciler
+from ..order_gateways.binance.rest_client import BinanceRESTClient
+from ..order_gateways.binance.symbols import SymbolMapper
+from ..order_gateways.binance.user_data import BinanceUserDataStream
 from ..oms import OMSEngine
 from ..position import AccountingMethod, EnginePortfolioView, PositionEngine
 from ..risk import RiskEngine
@@ -73,11 +73,11 @@ from ..strategy.examples import (
 from ..health import HealthServer
 from .schema import (
     AppConfig,
-    BinanceGatewaySpec,
+    BinanceOrderGatewaySpec,
     BusBackend,
     BusConfig,
     RuleSpec,
-    SimGatewaySpec,
+    SimOrderGatewaySpec,
     StrategySpec,
 )
 from .settings import load_settings
@@ -176,8 +176,8 @@ def _build_rule(spec: RuleSpec) -> Any:
     raise ConfigError(f"unknown rule type: {spec.type}")
 
 
-def _build_sim_gateway_config(spec: SimGatewaySpec) -> SimulationGatewayConfig:
-    return SimulationGatewayConfig(
+def _build_sim_order_gateway_config(spec: SimOrderGatewaySpec) -> SimulationOrderGatewayConfig:
+    return SimulationOrderGatewayConfig(
         venue=spec.venue,
         fees=FeeModel(maker_bps=spec.maker_bps, taker_bps=spec.taker_bps),
         latency=LatencyModel(
@@ -195,17 +195,17 @@ def _build_sim_gateway_config(spec: SimGatewaySpec) -> SimulationGatewayConfig:
 
 
 def _build_binance_components(
-    spec: BinanceGatewaySpec,
+    spec: BinanceOrderGatewaySpec,
     *,
     bus: AbstractEventBus,
     clock: Clock,
     instruments: dict[str, Instrument],
     oms: OMSEngine,
     pos: PositionEngine,
-) -> tuple[BinanceGateway, list]:
-    """Build the Binance gateway plus its supporting services.
+) -> tuple[BinanceOrderGateway, list]:
+    """Build the Binance order_gateway plus its supporting services.
 
-    Returns ``(gateway, services)`` where ``services`` is a list of objects
+    Returns ``(order_gateway, services)`` where ``services`` is a list of objects
     with ``start()``/``stop()`` coroutines: [ListenKeyManager,
     BinanceUserDataStream, BalanceReconciler].  The caller is responsible
     for starting and stopping them in order.
@@ -237,7 +237,7 @@ def _build_binance_components(
     symbols = SymbolMapper(venue_insts)
     rest = BinanceRESTClient(config=cfg, credentials=creds, clock=clock)
 
-    gw = BinanceGateway(
+    gw = BinanceOrderGateway(
         bus=bus, clock=clock, config=cfg,
         credentials=creds, symbols=symbols, rest_client=rest,
     )
@@ -269,10 +269,10 @@ class LiveApp:
     risk_engine: RiskEngine
     oms_engine: OMSEngine
     strategy_registry: StrategyRegistry
-    gateways: list[AbstractGateway]
+    order_gateways: list[AbstractOrderGateway]
     # Venue-specific supporting services: ListenKeyManagers,
-    # BinanceUserDataStreams, BalanceReconcilers.  Started after gateways
-    # (which connect REST), stopped before gateways in reverse order.
+    # BinanceUserDataStreams, BalanceReconcilers.  Started after order_gateways
+    # (which connect REST), stopped before order_gateways in reverse order.
     extra_services: list = field(default_factory=list)
     # Optional HTTP health/metrics server.  None means disabled.
     health_server: HealthServer | None = None
@@ -281,11 +281,11 @@ class LiveApp:
         await self.position_engine.start()
         await self.risk_engine.start()
         await self.oms_engine.start()
-        # Gateways first: they open the REST connection that extra services need.
-        for gw in self.gateways:
+        # OrderGateways first: they open the REST connection that extra services need.
+        for gw in self.order_gateways:
             await gw.start()
             # Immediately cancel any orders left over from a previous session.
-            if isinstance(gw, BinanceGateway):
+            if isinstance(gw, BinanceOrderGateway):
                 cancelled = await gw.cancel_stale_orders()
                 if cancelled:
                     _log.warning(
@@ -309,7 +309,7 @@ class LiveApp:
         await self.strategy_registry.stop()
         for svc in reversed(self.extra_services):
             await svc.stop()
-        for gw in self.gateways:
+        for gw in self.order_gateways:
             await gw.stop()
         await self.oms_engine.stop()
         await self.risk_engine.stop()
@@ -321,8 +321,8 @@ class LiveApp:
             "oms": self.oms_engine.snapshot(),
             "risk": self.risk_engine.snapshot(),
             "position": self.position_engine.snapshot(),
-            "gateways": [
-                gw.snapshot() for gw in self.gateways if hasattr(gw, "snapshot")
+            "order_gateways": [
+                gw.snapshot() for gw in self.order_gateways if hasattr(gw, "snapshot")
             ],
         }
         return snap
@@ -351,23 +351,23 @@ def build_live_app(config: AppConfig) -> LiveApp:
         signal_ttl_seconds=config.oms.signal_ttl_seconds,
     )
 
-    # Gateways. One gateway per declared venue spec.
-    gateways: list[AbstractGateway] = []
+    # OrderGateways. One order_gateway per declared venue spec.
+    order_gateways: list[AbstractOrderGateway] = []
     extra_services: list = []
-    for gw_spec in config.gateways:
-        if isinstance(gw_spec, SimGatewaySpec):
-            gateways.append(
-                SimulationGateway(
+    for gw_spec in config.order_gateways:
+        if isinstance(gw_spec, SimOrderGatewaySpec):
+            order_gateways.append(
+                SimulationOrderGateway(
                     bus=bus, clock=clock,
-                    config=_build_sim_gateway_config(gw_spec),
+                    config=_build_sim_order_gateway_config(gw_spec),
                 )
             )
-        elif isinstance(gw_spec, BinanceGatewaySpec):
+        elif isinstance(gw_spec, BinanceOrderGatewaySpec):
             binance_gw, services = _build_binance_components(
                 gw_spec, bus=bus, clock=clock,
                 instruments=instruments, oms=oms, pos=pos,
             )
-            gateways.append(binance_gw)
+            order_gateways.append(binance_gw)
             extra_services.extend(services)
 
     # Strategy registry — gets a portfolio view backed by the position engine.
@@ -384,7 +384,7 @@ def build_live_app(config: AppConfig) -> LiveApp:
     return LiveApp(
         clock=clock, bus=bus,
         position_engine=pos, risk_engine=risk, oms_engine=oms,
-        strategy_registry=registry, gateways=gateways,
+        strategy_registry=registry, order_gateways=order_gateways,
         extra_services=extra_services,
     )
 
@@ -402,7 +402,7 @@ class BacktestApp:
     risk_engine: RiskEngine
     oms_engine: OMSEngine
     strategy_registry: StrategyRegistry
-    gateway: BacktestGateway
+    order_gateway: BacktestOrderGateway
     engine: BacktestEngine
 
     async def run(self) -> Any:
@@ -410,7 +410,7 @@ class BacktestApp:
         await self.position_engine.start()
         await self.risk_engine.start()
         await self.oms_engine.start()
-        await self.gateway.start()
+        await self.order_gateway.start()
         await self.strategy_registry.start()
         return await self.engine.run()
 
@@ -418,10 +418,10 @@ class BacktestApp:
 def build_backtest_app(config: AppConfig) -> BacktestApp:
     if config.backtest is None:
         raise ConfigError("backtest section required for backtest run")
-    if len(config.gateways) != 1:
+    if len(config.order_gateways) != 1:
         raise ConfigError(
-            "backtest currently supports exactly one gateway",
-            num_gateways=len(config.gateways),
+            "backtest currently supports exactly one order_gateway",
+            num_order_gateways=len(config.order_gateways),
         )
 
     clock = SimulatedClock(start=0)
@@ -447,10 +447,10 @@ def build_backtest_app(config: AppConfig) -> BacktestApp:
         signal_ttl_seconds=config.oms.signal_ttl_seconds,
     )
 
-    gw_spec = config.gateways[0]
-    gateway = BacktestGateway(
+    gw_spec = config.order_gateways[0]
+    order_gateway = BacktestOrderGateway(
         bus=bus, clock=clock,
-        config=_build_sim_gateway_config(gw_spec),
+        config=_build_sim_order_gateway_config(gw_spec),
     )
 
     portfolio = EnginePortfolioView(pos)
@@ -473,7 +473,7 @@ def build_backtest_app(config: AppConfig) -> BacktestApp:
 
     engine = BacktestEngine(
         clock=clock, bus=bus,
-        data_source=data_source, gateway=gateway,
+        data_source=data_source, order_gateway=order_gateway,
         position_engine=pos,
         config=BacktestConfig(
             snapshot_interval_seconds=config.backtest.snapshot_interval_seconds,
@@ -485,7 +485,7 @@ def build_backtest_app(config: AppConfig) -> BacktestApp:
     return BacktestApp(
         clock=clock, bus=bus,
         position_engine=pos, risk_engine=risk, oms_engine=oms,
-        strategy_registry=registry, gateway=gateway, engine=engine,
+        strategy_registry=registry, order_gateway=order_gateway, engine=engine,
     )
 
 

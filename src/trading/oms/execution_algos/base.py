@@ -1,7 +1,7 @@
 """Execution algorithm abstraction.
 
 An execution algorithm is a coordinator that decides *when* and *how
-much* to send to the gateway in service of a single parent order. It
+much* to send to the order_gateway in service of a single parent order. It
 emits a sequence of :class:`ChildOrderSpec`s; the OMS turns each spec
 into an :class:`OrderRequest`.
 

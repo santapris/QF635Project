@@ -54,7 +54,7 @@ class BinancePublicWSConnector(AbstractConnector):
     ``streams`` is the list of Binance stream identifiers
     (e.g. ``"btcusdt@bookTicker"``, ``"btcusdt@aggTrade"``,
     ``"btcusdt@depth"``). Use the helpers in
-    :mod:`trading.gateways.binance.stream_names` to construct these.
+    :mod:`trading.order_gateways.binance.stream_names` to construct these.
     """
 
     def __init__(

@@ -1,6 +1,6 @@
-"""Backtest gateway.
+"""Backtest order_gateway.
 
-Mirrors :class:`SimulationGateway` (fill semantics, fees, partial
+Mirrors :class:`SimulationOrderGateway` (fill semantics, fees, partial
 fills, slippage) but uses a *scheduled* approach instead of
 ``asyncio.sleep`` for latency. Events that would otherwise be emitted
 "after a latency delay" are placed on a min-heap keyed by simulated
@@ -9,9 +9,9 @@ ns; the replay engine drains them at the right simulated time.
 This is what lets a 24-hour historical replay finish in seconds: no
 wall-clock waits.
 
-The gateway exposes :meth:`due_events` to the replay engine. The
+The order_gateway exposes :meth:`due_events` to the replay engine. The
 engine calls it after each clock advance to drain whatever the
-gateway has ready, then continues to the next data event.
+order_gateway has ready, then continues to the next data event.
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ from ..core.types import (
     Timestamp,
 )
 from ..event_bus.base import AbstractEventBus, Topic
-from ..gateways.base import AbstractGateway
-from ..gateways.sim_config import SimulationGatewayConfig
+from ..order_gateways.base import AbstractOrderGateway
+from ..order_gateways.sim_config import SimulationOrderGatewayConfig
 
 _log = structlog.get_logger(__name__)
 
@@ -93,7 +93,7 @@ class _Scheduled:
     event: BaseEvent = field(compare=False)
 
 
-class BacktestGateway(AbstractGateway):
+class BacktestOrderGateway(AbstractOrderGateway):
     """Time-jumping venue simulator for backtests."""
 
     def __init__(
@@ -101,7 +101,7 @@ class BacktestGateway(AbstractGateway):
         *,
         bus: AbstractEventBus,
         clock: SimulatedClock,
-        config: SimulationGatewayConfig,
+        config: SimulationOrderGatewayConfig,
     ) -> None:
         self._bus = bus
         self._clock = clock
@@ -510,4 +510,4 @@ class BacktestGateway(AbstractGateway):
         return Timestamp(self._clock.now_ns() + int(delay_ms * _NS_PER_MS))
 
 
-__all__ = ["BacktestGateway"]
+__all__ = ["BacktestOrderGateway"]

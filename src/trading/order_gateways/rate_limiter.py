@@ -1,7 +1,7 @@
 """Token-bucket rate limiter.
 
 Real exchanges publish strict rate limits (e.g. Binance: 1200 weight per
-minute). A gateway that exceeds them gets HTTP 429 responses and, with
+minute). A order_gateway that exceeds them gets HTTP 429 responses and, with
 repeated violations, IP-banned. The rate limiter is one of those
 "unglamorous but mandatory" pieces of infrastructure.
 

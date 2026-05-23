@@ -42,7 +42,7 @@ from trading.core.types import (
     Price,
     Quantity,
 )
-from trading.gateways.binance.gateway import BinanceGateway
+from trading.order_gateways.binance.order_gateway import BinanceOrderGateway
 from trading.oms import OMSEngine
 from trading.oms.order import Order
 from trading.position import PositionEngine
@@ -291,13 +291,13 @@ async def test_position_engine_backpressure_on_portfolio_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# 2.4  BinanceGateway (publish helpers only — no live network)
+# 2.4  BinanceOrderGateway (publish helpers only — no live network)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
 def binance_gw(full_bus, clock, btc_inst):
-    from trading.gateways.binance.config import BinanceConfig, BinanceCredentials
-    from trading.gateways.binance.symbols import SymbolMapper
+    from trading.order_gateways.binance.config import BinanceConfig, BinanceCredentials
+    from trading.order_gateways.binance.symbols import SymbolMapper
 
     cfg = BinanceConfig(
         spot_rest_base="https://testnet.binance.vision",
@@ -312,14 +312,14 @@ def binance_gw(full_bus, clock, btc_inst):
         async def connect(self): pass
         async def close(self): pass
 
-    return BinanceGateway(
+    return BinanceOrderGateway(
         bus=full_bus, clock=clock, config=cfg,
         credentials=creds, symbols=symbols,
         rest_client=_FakeREST(),
     )
 
 
-async def test_gateway_backpressure_on_ack(binance_gw, btc_inst, clock, caplog) -> None:
+async def test_order_gateway_backpressure_on_ack(binance_gw, btc_inst, clock, caplog) -> None:
     oid = OrderId(uuid4())
     req = OrderRequest(
         ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="test",
@@ -328,14 +328,14 @@ async def test_gateway_backpressure_on_ack(binance_gw, btc_inst, clock, caplog) 
         side=Side.BUY, order_type=OrderType.MARKET,
         quantity=Decimal("1"), price=None, time_in_force=TimeInForce.IOC,
     )
-    with caplog.at_level(logging.CRITICAL, logger="trading.gateways.binance.gateway"):
+    with caplog.at_level(logging.CRITICAL, logger="trading.order_gateways.binance.order_gateway"):
         await binance_gw._publish_ack(req, ExchangeOrderId("ex-1"))
 
     assert binance_gw._dropped_events >= 1
     assert "backpressure" in caplog.text.lower()
 
 
-async def test_gateway_backpressure_on_reject(binance_gw, btc_inst, clock, caplog) -> None:
+async def test_order_gateway_backpressure_on_reject(binance_gw, btc_inst, clock, caplog) -> None:
     oid = OrderId(uuid4())
     req = OrderRequest(
         ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="test",
@@ -344,7 +344,7 @@ async def test_gateway_backpressure_on_reject(binance_gw, btc_inst, clock, caplo
         side=Side.BUY, order_type=OrderType.MARKET,
         quantity=Decimal("1"), price=None, time_in_force=TimeInForce.IOC,
     )
-    with caplog.at_level(logging.CRITICAL, logger="trading.gateways.binance.gateway"):
+    with caplog.at_level(logging.CRITICAL, logger="trading.order_gateways.binance.order_gateway"):
         await binance_gw._publish_reject(req, "insufficient balance")
 
     assert binance_gw._dropped_events >= 1
