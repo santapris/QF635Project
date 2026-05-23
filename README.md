@@ -13,9 +13,10 @@ paper trading, and (with real order_gateway adapters added) live trading.
 - Position engine with WAVG / FIFO / LIFO accounting
 - OMS with state machine, signal/decision join, and TWAP/VWAP execution
 - Simulation order_gateway (paper trading) and backtest order_gateway (time-jumping)
+- Binance Spot & Futures order_gateway with REST/WebSocket, depth book management, and testnet connectivity
 - Backtest engine with deterministic simulated clock, Sharpe/Sortino/drawdown metrics
 
-Deferred: real exchange adapters, Kafka end-to-end test infrastructure, dashboards.
+Deferred: additional exchange adapters, Kafka end-to-end test infrastructure, dashboards.
 
 ## Layout
 
@@ -23,18 +24,22 @@ Deferred: real exchange adapters, Kafka end-to-end test infrastructure, dashboar
 src/trading/
   core/          types, events, clock, instruments, exceptions, positions
   event_bus/     in-memory, asyncio, Kafka pub-sub
-  feed_handler/  market data ingestion + order book
-  strategy/      strategy framework, registry, indicators, examples
+  feed_handler/  market data ingestion + order book + connectors + normalizers
+  strategy/      strategy framework, registry, indicator_lib, examples
   risk/          pre-trade risk engine + rules + kill switch
-  position/      position tracking + WAVG/FIFO/LIFO accounting
+  position/      position tracking + WAVG/FIFO/LIFO accounting + pnl
   oms/           OMS, state machine, execution algos (TWAP/VWAP)
-  order_gateways/      simulation order_gateway + rate limiter + venue registry
+  order_gateways/      simulation + Binance adapter + rate limiter + venue registry
   backtest/      replay engine + scheduling order_gateway + metrics + report
-  config/        Pydantic schema + TOML loader + builder
-  runners/       CLI entry points
+  config/        Pydantic schema + TOML loader + builder + settings
+  runners/       CLI entry points + staged pipeline (stage1-4)
+  health.py      component health checks + backpressure gauge
+  logging.py     structlog configuration
+  monitoring/    (deferred)
+  persistence/   (deferred)
 tests/
   unit/          per-module tests
-  integration/   cross-module end-to-end tests
+  integration/   cross-module end-to-end tests (pipeline + binance wiring)
 configs/         example TOML configs + sample data
 ```
 
@@ -59,11 +64,10 @@ To run paper trading against the simulation order_gateway:
 make run-paper    # Ctrl-C to stop
 ```
 
-To run and validate binance_testnet
+To run and validate binance_testnet:
 ```bash
-export BINANCE_TESTNET_API_KEY= ""
-export BINANCE_TESTNET_API_SECRET=""
-python -m trading.runners.run_binance_testnet --log-level DEBUG/INFO
+cp .env.example .env   # then fill in BINANCE_API_KEY and BINANCE_API_SECRET
+python -m trading.runners.run_binance_testnet
 ```
 
 ## Architecture
@@ -80,4 +84,4 @@ only on injected `Clock`. In production the clock is wall-clock; in
 backtests it is a `SimulatedClock` advanced by the replay engine. The
 same code produces identical results in both environments.
 
-See `trading_system_architecture.md` for the full design document.
+See `docs/system_architecture.md` for the full design document.
