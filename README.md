@@ -84,4 +84,4 @@ only on injected `Clock`. In production the clock is wall-clock; in
 backtests it is a `SimulatedClock` advanced by the replay engine. The
 same code produces identical results in both environments.
 
-See `docs/system_architecture.md` for the full design document.
+See `docs/architecture` for the full design documents.
