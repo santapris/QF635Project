@@ -25,11 +25,9 @@ immediately and investigate before adding more capital.
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import signal
 import structlog
-import sys
 from decimal import Decimal
 
 from trading.core import AssetType, Instrument, LiveClock, StrategyId
@@ -59,7 +57,6 @@ from trading.risk.rules import (
 )
 from trading.strategy import StrategyRegistry
 from trading.strategy.examples import MomentumStrategy
-from trading.logging import configure_logging
 from trading.config import load_settings
 
 
@@ -82,8 +79,7 @@ def _build_instruments() -> list[Instrument]:
     ]
 
 
-async def _amain(args: argparse.Namespace) -> int:
-    configure_logging(level=args.log_level)
+async def _amain() -> int:
     log = structlog.get_logger("binance.testnet")
 
     # --- Config and creds ---------------------------------------------
@@ -221,16 +217,8 @@ async def _amain(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Run a Binance Spot testnet trading session."
-    )
-    parser.add_argument(
-        "--log-level", default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-    )
-    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
-    return asyncio.run(_amain(args))
+def main() -> int:
+    return asyncio.run(_amain())
 
 
 if __name__ == "__main__":
