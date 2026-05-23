@@ -24,7 +24,7 @@ RiskAlertEvent) so an operator notices and decides.
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from decimal import Decimal
 from typing import Final
 
@@ -37,7 +37,7 @@ from ...position.engine import PositionEngine
 from .config import BinanceConfig
 from .rest_client import BinanceRESTClient
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 _W_ACCOUNT: Final[float] = 10.0  # Binance weight for account info endpoint. Not in official docs but observed empirically. We set it higher than the observed 5 to be safe; if we get throttled we want to back off more aggressively. If Binance changes this, we'll get a 429 and can adjust accordingly.
 
@@ -102,7 +102,7 @@ class BalanceReconciler:
             except asyncio.CancelledError:
                 return
             except Exception:
-                _log.exception("balance reconcile failed; will retry next cycle")
+                _log.exception("balance_reconcile_failed_will_retry_next_cycle")
             try:
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:

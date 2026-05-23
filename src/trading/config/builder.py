@@ -20,7 +20,7 @@ needs :class:`SimulationGateway` (asyncio-sleep latency). Backtest needs
 
 from __future__ import annotations
 
-import logging
+import structlog
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -81,7 +81,7 @@ from .schema import (
     StrategySpec,
 )
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 # --- Helpers ----------------------------------------------------------------
@@ -279,8 +279,8 @@ class LiveApp:
                 cancelled = await gw.cancel_stale_orders()
                 if cancelled:
                     _log.warning(
-                        "startup: cancelled %d stale order(s) on %s",
-                        cancelled, gw.venue,
+                        "startup_cancelled_stale_orders",
+                        num_cancelled=cancelled, venue=gw.venue,
                     )
         for svc in self.extra_services:
             await svc.start()

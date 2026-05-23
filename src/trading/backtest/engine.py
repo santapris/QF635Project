@@ -25,7 +25,7 @@ time — only ``SimulatedClock``.
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from dataclasses import dataclass
 from typing import Final
 
@@ -38,7 +38,7 @@ from .data_source import DataSource
 from .gateway import BacktestGateway
 from .report import BacktestReport
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 _NS_PER_SECOND: Final[int] = 1_000_000_000
 

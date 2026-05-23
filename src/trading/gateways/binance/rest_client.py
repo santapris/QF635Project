@@ -31,7 +31,7 @@ Three concerns this code is explicit about:
 
 from __future__ import annotations
 
-import logging
+import structlog
 import time
 from typing import Any, Mapping
 from urllib.parse import urlencode
@@ -48,7 +48,7 @@ from .config import BinanceConfig, BinanceCredentials
 from .errors import BinanceErrorResponse, translate_error
 from .signing import encode_query, sign
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 class BinanceRESTClient:
@@ -137,7 +137,7 @@ class BinanceRESTClient:
                 offset_ms=offset,
             )
         self._server_time_offset_ms = offset
-        _log.info("binance clock offset = %d ms", offset)
+        _log.info("binance_clock_offset", offset_ms=offset)
 
     def _now_ms_for_binance(self) -> int:
         """Wall-clock in ms, adjusted to match Binance server time."""

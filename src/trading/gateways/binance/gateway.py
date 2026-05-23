@@ -32,7 +32,7 @@ Important behaviour notes:
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from decimal import Decimal
 from typing import Any
 
@@ -65,7 +65,7 @@ from .order_translation import (
 from .rest_client import BinanceRESTClient
 from .symbols import SymbolMapper
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 # Binance endpoint weights from the docs. Worth keeping these accurate
@@ -171,7 +171,7 @@ class BinanceGateway(AbstractGateway):
             # distinguishing reason so the OMS can surface to a human, but
             # ideally the OMS would retry by client_order_id on rate-limit.
             # For now: reject and log loudly.
-            _log.exception("binance new-order gateway error: %s", exc)
+            _log.exception("binance_new_order_gateway_error")
             await self._publish_reject(req, f"gateway error: {exc}")
             return
 
@@ -231,13 +231,14 @@ class BinanceGateway(AbstractGateway):
             # We translate that to a rejection of the cancel itself — the
             # OMS state for the order will catch up via the fill stream.
             _log.info(
-                "binance cancel rejected: %s (order_id=%s)",
-                exc.message, req.order_id,
+                "binance_cancel_rejected",
+                order_id=req.order_id,
+                reason=exc.message,
             )
             await self._publish_cancel_rejected(req, exc.message)
             return
         except GatewayError as exc:
-            _log.exception("binance cancel transport error: %s", exc)
+            _log.exception("binance_cancel_transport_error")
             await self._publish_cancel_rejected(req, f"transport error: {exc}")
             return
 
@@ -339,8 +340,7 @@ class BinanceGateway(AbstractGateway):
                 )
             except Exception:
                 _log.exception(
-                    "startup sync: failed to list open orders for %s; skipping",
-                    wire_sym,
+                    "startup_sync_failed_to_list_open_orders", wire_symbol=wire_sym,
                 )
                 continue
             for order in orders:
@@ -352,14 +352,14 @@ class BinanceGateway(AbstractGateway):
                         signed=True, weight=_W_CANCEL_ORDER,
                     )
                     _log.warning(
-                        "startup sync: cancelled stale order orderId=%s symbol=%s",
-                        order_id, wire_sym,
+                        "startup_sync_cancelled_stale_order",
+                        order_id=order_id, symbol=wire_sym,
                     )
                     total += 1
                 except Exception:
                     _log.exception(
-                        "startup sync: failed to cancel stale order orderId=%s symbol=%s",
-                        order_id, wire_sym,
+                        "startup_sync_failed_to_cancel_stale_order",
+                        order_id=order_id, symbol=wire_sym,
                     )
         return total
 
@@ -383,9 +383,9 @@ class BinanceGateway(AbstractGateway):
         except BackpressureError as exc:
             self._dropped_events += 1
             _log.critical(
-                "bus backpressure; gateway event dropped [total_drops=%d] "
-                "topic=%r event_type=%r: %s",
-                self._dropped_events, topic, type(event).__name__, exc,
+                "bus_backpressure_gateway_event_dropped",
+                total_drops=self._dropped_events, topic=topic,
+                event_type=type(event).__name__,
             )
             return False
 

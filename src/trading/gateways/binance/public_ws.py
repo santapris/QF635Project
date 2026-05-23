@@ -30,7 +30,7 @@ Connection lifecycle:
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from collections.abc import AsyncIterator, Sequence
 
 try:
@@ -45,7 +45,7 @@ from ...core.exceptions import FeedDisconnectedError
 from ...feed_handler.base import AbstractConnector, RawMessage
 from .config import BinanceConfig
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 class BinancePublicWSConnector(AbstractConnector):
@@ -85,7 +85,7 @@ class BinancePublicWSConnector(AbstractConnector):
         if self._connected:
             return
         url = self._build_url()
-        _log.info("connecting to binance public WS: %d streams", len(self._streams))
+        _log.info("connecting_to_binance_public_ws", num_streams=len(self._streams))
         try:
             # ping_interval keeps the connection healthy; ping_timeout fails fast
             # when the server stops responding.
@@ -127,7 +127,7 @@ class BinancePublicWSConnector(AbstractConnector):
                 try:
                     payload = json.loads(text)
                 except json.JSONDecodeError:
-                    _log.warning("binance WS sent non-JSON: %s", text[:200])
+                    _log.warning("binance_ws_non_json", text=text[:200])
                     continue
                 yield RawMessage(
                     payload=payload,

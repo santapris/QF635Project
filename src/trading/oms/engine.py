@@ -28,7 +28,7 @@ dropped on each new signal arrival. Stops the cache growing unbounded.
 
 from __future__ import annotations
 
-import logging
+import structlog
 from collections import deque
 from collections.abc import Iterable
 from decimal import Decimal
@@ -61,7 +61,7 @@ from .execution_algos import ChildOrderSpec, ExecutionAlgo
 from .order import Order
 from .router import OrderRouter
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 _NS_PER_SECOND = 1_000_000_000
 
@@ -133,8 +133,8 @@ class OMSEngine:
         entry = self._signal_cache.pop(event.signal_event_id, None)
         if entry is None:
             _log.warning(
-                "risk decision references signal we never saw or it expired: %s",
-                event.signal_event_id,
+                "risk_decision_references_stale_or_unknown_signal",
+                signal_event_id=event.signal_event_id,
             )
             return
         signal, _ = entry
@@ -150,8 +150,8 @@ class OMSEngine:
             )
         except Exception:
             _log.exception(
-                "router failed to construct algo; dropping signal %s",
-                signal.event_id,
+                "router_failed_to_construct_algo_dropping_signal",
+                signal_event_id=signal.event_id,
             )
             return
 
@@ -183,11 +183,11 @@ class OMSEngine:
             return
         order = self._orders.get(event.order_id)
         if order is None:
-            _log.warning("fill for unknown order_id %s; ignoring", event.order_id)
+            _log.warning("fill_for_unknown_order_id_ignoring", order_id=event.order_id)
             return
         applied = order.apply_fill(event)
         if not applied:
-            _log.info("duplicate fill %s ignored", event.fill_id)
+            _log.info("duplicate_fill_ignored", fill_id=event.fill_id)
             return
         if order.parent_order_id is not None:
             algo = self._algos.get(order.parent_order_id)
@@ -195,7 +195,7 @@ class OMSEngine:
                 try:
                     algo.on_fill(event)
                 except Exception:
-                    _log.exception("algo.on_fill raised; ignoring")
+                    _log.exception("algo_on_fill_raised_ignoring")
                 # If parent is finished (algo done + no leaves), tidy up.
                 if algo.is_done() and self._parent_has_leaves(order.parent_order_id) == Decimal(0):
                     self._algos.pop(order.parent_order_id, None)
@@ -210,7 +210,7 @@ class OMSEngine:
             try:
                 algo.on_tick(event)
             except Exception:
-                _log.exception("algo.on_tick raised; ignoring")
+                _log.exception("algo_on_tick_raised_ignoring")
                 continue
             await self._drive_algo(parent_id)
 
@@ -394,9 +394,9 @@ class OMSEngine:
         except BackpressureError as exc:
             self._dropped_events += 1
             _log.critical(
-                "bus backpressure; OMS event dropped [total_drops=%d] "
-                "topic=%r event_type=%r: %s",
-                self._dropped_events, topic, type(event).__name__, exc,
+                "bus_backpressure_oms_event_dropped",
+                total_drops=self._dropped_events, topic=topic,
+                event_type=type(event).__name__,
             )
             return False
 

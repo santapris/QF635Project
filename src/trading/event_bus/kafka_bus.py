@@ -22,7 +22,7 @@ Design notes:
 
 from __future__ import annotations
 
-import logging
+import structlog
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -36,7 +36,7 @@ from .base import EventHandler
 if TYPE_CHECKING:  # pragma: no cover
     from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 # Built once at import time. The discriminated union dispatches to the
 # correct subtype based on the ``event_type`` field.
@@ -189,9 +189,8 @@ class KafkaBus:
                     event = _event_adapter.validate_json(msg.value)
                 except Exception as exc:
                     _log.exception(
-                        "failed to deserialize kafka message",
-                        extra={"topic": msg.topic, "offset": msg.offset},
-                        exc_info=exc,
+                        "failed_to_deserialize_kafka_message",
+                        topic=msg.topic, offset=msg.offset,
                     )
                     await sub.consumer.commit()
                     continue
@@ -206,7 +205,7 @@ class KafkaBus:
                         if _asyncio.iscoroutine(result):
                             await result
                     except Exception:
-                        _log.exception("error callback itself raised")
+                        _log.exception("error_callback_itself_raised")
 
                 # Commit only after the handler has succeeded (or its error
                 # was acknowledged via the callback). At-least-once.
@@ -234,9 +233,8 @@ async def _default_error_callback(
     topic: str, raw: bytes, exc: BaseException
 ) -> None:
     _log.exception(
-        "kafka handler raised",
-        extra={"topic": topic, "raw_size": len(raw)},
-        exc_info=exc,
+        "kafka_handler_raised",
+        topic=topic, raw_size=len(raw),
     )
 
 

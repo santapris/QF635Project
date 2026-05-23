@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
-import logging
+import structlog
 import random
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -55,7 +55,7 @@ from ..event_bus.base import AbstractEventBus, Topic
 from ..gateways.base import AbstractGateway
 from ..gateways.sim_config import SimulationGatewayConfig
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 _NS_PER_MS = 1_000_000
 

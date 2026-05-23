@@ -21,13 +21,13 @@ new one was obtained).
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from typing import Final
 
 from .config import BinanceConfig
 from .rest_client import BinanceRESTClient
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 class ListenKeyManager:
@@ -102,7 +102,7 @@ class ListenKeyManager:
             weight=1,
         )
         key = str(resp["listenKey"])
-        _log.info("binance listen key obtained")
+        _log.info("binance_listen_key_obtained")
         return key
 
     async def _keepalive(self, key: str) -> None:
@@ -131,17 +131,17 @@ class ListenKeyManager:
             assert self._key is not None
             try:
                 await self._keepalive(self._key)
-                _log.debug("binance listen key kept alive")
+                _log.debug("binance_listen_key_kept_alive")
             except Exception:
                 # Keepalive failed — typically because key has expired
                 # already (-1125 from translate_error). Recover by
                 # obtaining a fresh key and signalling recreation.
-                _log.exception("binance listen key keepalive failed; reissuing")
+                _log.exception("binance_listen_key_keepalive_failed_reissuing")
                 try:
                     self._key = await self._obtain_key()
                     self._recreation_event.set()
                 except Exception:
-                    _log.exception("binance listen key reissue failed; will retry next cycle")
+                    _log.exception("binance_listen_key_reissue_failed_will_retry_next_cycle")
 
 
 __all__ = ["ListenKeyManager"]

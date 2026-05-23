@@ -12,7 +12,7 @@ that are policy rather than translation:
 from __future__ import annotations
 
 import asyncio
-import logging
+import structlog
 from dataclasses import dataclass
 
 from ..core.clock import Clock
@@ -30,7 +30,7 @@ from ..core.types import Severity, Symbol
 from ..event_bus.base import AbstractEventBus, Topic
 from .base import AbstractConnector, AbstractNormalizer, InstrumentLookup
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 _NS_PER_SECOND = 1_000_000_000
 
@@ -115,15 +115,17 @@ class FeedHandler:
                         break
                     delay = self._backoff_for(attempt)
                     _log.warning(
-                        "feed disconnected; reconnect in %.1fs (attempt %d/%d): %s",
-                        delay, attempt, self._cfg.max_reconnect_attempts, exc,
+                        "feed_disconnected_reconnecting",
+                        delay_seconds=delay, attempt=attempt,
+                        max_attempts=self._cfg.max_reconnect_attempts,
+                        error=str(exc),
                     )
                     await asyncio.sleep(delay)
                 except Exception:
                     # Anything else is unexpected — log loudly and break.
                     # We do not attempt to reconnect on unknown errors,
                     # because the failure mode is unknown.
-                    _log.exception("feed handler crashed; stopping")
+                    _log.exception("feed_handler_crashed_stopping")
                     raise
                 finally:
                     await self._connector.disconnect()
@@ -145,8 +147,8 @@ class FeedHandler:
                 events = self._normalizer.normalize(raw, self._instrument_lookup)
             except Exception:
                 _log.exception(
-                    "normalizer raised on payload from %s; skipping frame",
-                    raw.source,
+                    "normalizer_raised_skipping_frame",
+                    source=raw.source,
                 )
                 continue
             for event in events:
@@ -169,8 +171,9 @@ class FeedHandler:
             elapsed_ns = self._clock.monotonic_ns() - self._last_message_monotonic_ns
             if elapsed_ns > threshold_ns:
                 _log.warning(
-                    "feed %s stale: no messages for %.1fs; forcing reconnect",
-                    self._source, elapsed_ns / _NS_PER_SECOND,
+                    "feed_stale_forcing_reconnect",
+                    source=self._source,
+                    elapsed_seconds=elapsed_ns / _NS_PER_SECOND,
                 )
                 await self._publish_stale_feed_alert(elapsed_ns)
                 # Forcing disconnect causes the consume loop to raise

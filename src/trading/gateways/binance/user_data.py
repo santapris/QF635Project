@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
+import structlog
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Final
@@ -56,7 +56,7 @@ from .config import BinanceConfig
 from .listen_key import ListenKeyManager
 from .symbols import SymbolMapper
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 _BACKOFF_INITIAL_SEC: Final[float] = 1.0
 _BACKOFF_MAX_SEC: Final[float] = 60.0
@@ -156,20 +156,20 @@ class BinanceUserDataStream:
             except FeedDisconnectedError as exc:
                 if self._stop:
                     return
-                _log.warning("binance user data WS disconnected: %s; reconnecting in %.1fs", exc, backoff)
+                _log.warning("binance_user_data_ws_disconnected_reconnecting", error=str(exc), backoff_seconds=backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(_BACKOFF_MAX_SEC, backoff * 2)
             except Exception:
                 if self._stop:
                     return
-                _log.exception("binance user data stream error; reconnecting in %.1fs", backoff)
+                _log.exception("binance_user_data_stream_error_reconnecting", backoff_seconds=backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(_BACKOFF_MAX_SEC, backoff * 2)
 
     async def _stream_one_session(self, listen_key: str) -> None:
         """Connect with ``listen_key`` and drain until disconnect or key change."""
         url = f"{self._config.ws_base_url}/ws/{listen_key}"
-        _log.info("connecting to binance user data WS")
+        _log.info("connecting_to_binance_user_data_ws")
         try:
             async with websockets.connect(
                 url,
@@ -193,7 +193,7 @@ class BinanceUserDataStream:
                         )
                         if recreate_task in done:
                             recv_task.cancel()
-                            _log.info("listen key recreated; reconnecting user data WS")
+                            _log.info("listen_key_recreated_reconnecting_user_data_ws")
                             return
                         # recv_task completed
                         try:
@@ -224,7 +224,7 @@ class BinanceUserDataStream:
         try:
             msg = json.loads(text)
         except json.JSONDecodeError:
-            _log.warning("user data WS non-JSON: %s", text[:200])
+            _log.warning("user_data_ws_non_json", text=text[:200])
             return
 
         event_type = msg.get("e")
@@ -239,14 +239,14 @@ class BinanceUserDataStream:
             # Some Binance docs mention this; not always sent. The
             # listen-key keepalive normally prevents it. If it arrives,
             # treat as a disconnect — the manager will issue a new key.
-            _log.warning("binance reported listenKey expired")
+            _log.warning("binance_reported_listen_key_expired")
             raise FeedDisconnectedError(
                 "listenKey expired", source="binance-user-data",
             )
         else:
             # Unknown event types: log and continue. Binance occasionally
             # adds new ones; we shouldn't crash on the future.
-            _log.debug("ignoring binance user data event type: %r", event_type)
+            _log.debug("ignoring_binance_user_data_event_type", event_type=event_type)
 
     async def _handle_execution_report(self, msg: dict) -> None:
         """Parse and publish from an executionReport message.
@@ -280,7 +280,7 @@ class BinanceUserDataStream:
         if instrument is None:
             # Fill on a symbol we don't have an instrument for. Ignore;
             # this typically means a manually-placed order on Binance UI.
-            _log.debug("user data WS event for unknown symbol %r; ignoring", wire_symbol)
+            _log.debug("user_data_ws_event_for_unknown_symbol_ignoring", wire_symbol=wire_symbol)
             return
 
         client_order_id = ClientOrderId(str(msg.get("c", "")))
@@ -291,8 +291,8 @@ class BinanceUserDataStream:
             # whose ack we missed). Skip rather than fabricate an OrderId
             # — the OMS would reject the fill anyway.
             _log.warning(
-                "user data WS event for unknown client_order_id %r; skipping",
-                client_order_id,
+                "user_data_ws_event_for_unknown_client_order_id_skipping",
+                client_order_id=client_order_id,
             )
             return
 
@@ -341,7 +341,7 @@ class BinanceUserDataStream:
             # avoid duplicate events.
             pass
         else:
-            _log.debug("unhandled executionReport x=%r", exec_type)
+            _log.debug("unhandled_execution_report", exec_type=exec_type)
 
     async def _publish_fill(
         self,

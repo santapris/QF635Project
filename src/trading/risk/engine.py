@@ -27,7 +27,7 @@ queue gives us that serialisation for free.
 
 from __future__ import annotations
 
-import logging
+import structlog
 from collections.abc import Iterable
 from decimal import Decimal
 
@@ -48,7 +48,7 @@ from .base import AbstractRiskRule, RuleResult
 from .kill_switch import KillSwitch
 from .state import RiskState
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 class RiskEngine:
@@ -144,8 +144,8 @@ class RiskEngine:
                 result = rule.evaluate(event, self._state)
             except Exception:
                 _log.exception(
-                    "rule %s raised; treating as reject", rule.name,
-                    extra={"strategy_id": event.strategy_id},
+                    "rule_raised_treating_as_reject", rule_name=rule.name,
+                    strategy_id=event.strategy_id,
                 )
                 # A buggy rule fails closed.
                 result = RuleResult.reject(
@@ -212,9 +212,9 @@ class RiskEngine:
         except BackpressureError as exc:
             self._dropped_events += 1
             _log.critical(
-                "bus backpressure; risk event dropped [total_drops=%d] "
-                "topic=%r event_type=%r: %s",
-                self._dropped_events, topic, type(event).__name__, exc,
+                "bus_backpressure_risk_event_dropped",
+                total_drops=self._dropped_events, topic=topic,
+                event_type=type(event).__name__,
             )
             return False
 

@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import sys
 from pathlib import Path
 
 from trading.config import build_backtest_app, load_config
+from trading.logging import configure_logging
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -35,10 +35,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 async def _amain(args: argparse.Namespace) -> int:
-    logging.basicConfig(
-        level=args.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging(level=args.log_level)
 
     config = load_config(args.config)
     app = build_backtest_app(config)

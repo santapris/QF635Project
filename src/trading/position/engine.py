@@ -27,7 +27,7 @@ Design choices:
 
 from __future__ import annotations
 
-import logging
+import structlog
 from decimal import Decimal
 
 from ..core.clock import Clock
@@ -45,7 +45,7 @@ from .pnl import (
     make_position_update_event,
 )
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 class PositionEngine:
@@ -102,11 +102,9 @@ class PositionEngine:
             book.apply_fill(event)
         except Exception:
             _log.exception(
-                "book.apply_fill raised; book state may be inconsistent",
-                extra={
-                    "strategy_id": event.strategy_id,
-                    "instrument": event.instrument.instrument_id,
-                },
+                "book_apply_fill_raised_book_state_may_be_inconsistent",
+                strategy_id=event.strategy_id,
+                instrument=event.instrument.instrument_id,
             )
             return
 
@@ -249,9 +247,9 @@ class PositionEngine:
         except BackpressureError as exc:
             self._dropped_events += 1
             _log.error(
-                "bus backpressure; position event dropped [total_drops=%d] "
-                "topic=%r event_type=%r: %s",
-                self._dropped_events, topic, type(event).__name__, exc,
+                "bus_backpressure_position_event_dropped",
+                total_drops=self._dropped_events, topic=topic,
+                event_type=type(event).__name__,
             )
             return False
 

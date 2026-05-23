@@ -95,9 +95,9 @@ class MarketMakingStrategy(AbstractStrategy):
         # than the strategy's. We log here for audit but emit no signals;
         # the next tick will produce updated quotes via on_tick.
         ctx.logger.info(
-            "filled %s %s @ %s (leaves=%s)",
-            event.side.value, event.fill_quantity, event.fill_price,
-            event.leaves_quantity,
+            "filled",
+            side=event.side.value, fill_quantity=event.fill_quantity,
+            fill_price=event.fill_price, leaves_quantity=event.leaves_quantity,
         )
         return []
 

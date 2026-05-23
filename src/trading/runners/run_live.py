@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import signal
+import structlog
 import sys
 from pathlib import Path
 
 from trading.config import build_live_app, load_config
 from trading.health import HealthServer
+from trading.logging import configure_logging
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -39,11 +40,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 async def _amain(args: argparse.Namespace) -> int:
-    logging.basicConfig(
-        level=args.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    _log = logging.getLogger("trading.runner")
+    configure_logging(level=args.log_level)
+    _log = structlog.get_logger("trading.runner")
 
     config = load_config(args.config)
     app = build_live_app(config)
@@ -55,13 +53,12 @@ async def _amain(args: argparse.Namespace) -> int:
         )
 
     await app.start()
-    _log.info("trading app started")
+    _log.info("trading_app_started")
 
-    # Wait for a shutdown signal.
     stop_event = asyncio.Event()
 
     def _signal_handler() -> None:
-        _log.info("shutdown signal received")
+        _log.info("shutdown_signal_received")
         stop_event.set()
 
     loop = asyncio.get_running_loop()
@@ -69,17 +66,15 @@ async def _amain(args: argparse.Namespace) -> int:
         try:
             loop.add_signal_handler(sig, _signal_handler)
         except NotImplementedError:
-            # Windows doesn't support add_signal_handler; runners on
-            # Windows can ctrl-C and we'll cope with KeyboardInterrupt.
             pass
 
     try:
         await stop_event.wait()
     except KeyboardInterrupt:
-        _log.info("KeyboardInterrupt — shutting down")
+        _log.info("keyboard_interrupt_shutting_down")
     finally:
         await app.stop()
-        _log.info("trading app stopped")
+        _log.info("trading_app_stopped")
     return 0
 
 

@@ -17,7 +17,7 @@ That separation is what keeps strategies pure and replayable.
 
 from __future__ import annotations
 
-import logging
+import structlog
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -89,7 +89,7 @@ class StrategyContext:
     strategy_id: StrategyId
     clock: Clock
     portfolio: PortfolioView
-    logger: logging.Logger
+    logger: structlog.BoundLogger
     parameters: Mapping[str, Any]
 
     def get_param(self, key: str, default: Any = None) -> Any:

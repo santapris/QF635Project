@@ -22,11 +22,11 @@ Usage:
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from collections.abc import Callable
 from typing import Any
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 class HealthServer:
@@ -49,9 +49,9 @@ class HealthServer:
             from aiohttp import web
         except ImportError:
             _log.warning(
-                "aiohttp not installed; health server on port %d is disabled. "
-                "Install with: pip install 'aiohttp>=3.9'",
-                self._port,
+                "aiohttp_not_installed_health_server_disabled",
+                port=self._port,
+                install_hint="pip install 'aiohttp>=3.9'",
             )
             return
 
@@ -63,7 +63,7 @@ class HealthServer:
         await self._runner.setup()
         site = web.TCPSite(self._runner, self._host, self._port)
         await site.start()
-        _log.info("health server listening on %s:%d", self._host, self._port)
+        _log.info("health_server_listening", host=self._host, port=self._port)
 
     async def stop(self) -> None:
         if self._runner is not None:

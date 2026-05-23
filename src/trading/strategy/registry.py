@@ -21,7 +21,7 @@ Responsibilities:
 
 from __future__ import annotations
 
-import logging
+import structlog
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -42,7 +42,7 @@ from ..event_bus.base import AbstractEventBus, Topic
 from .base import AbstractStrategy
 from .context import PortfolioView, StrategyContext
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 
 _DispatchHandler = Callable[
@@ -89,7 +89,7 @@ class StrategyRegistry:
         self._strategies: dict[StrategyId, AbstractStrategy] = {}
         self._instrument_index: dict[str, list[StrategyId]] = defaultdict(list)
         self._parameters: dict[StrategyId, dict[str, Any]] = {}
-        self._loggers: dict[StrategyId, logging.Logger] = {}
+        self._loggers: dict[StrategyId, structlog.BoundLogger] = {}
         self._started = False
 
     # --- Registration ------------------------------------------------------
@@ -108,7 +108,7 @@ class StrategyRegistry:
             )
         self._strategies[strategy.strategy_id] = strategy
         self._parameters[strategy.strategy_id] = dict(parameters or {})
-        self._loggers[strategy.strategy_id] = logging.getLogger(
+        self._loggers[strategy.strategy_id] = structlog.get_logger(
             f"strategy.{strategy.strategy_id}"
         )
         for instrument in strategy.instruments:
@@ -156,7 +156,7 @@ class StrategyRegistry:
             try:
                 await strategy.on_stop(self._make_context(sid))
             except Exception:
-                _log.exception("strategy %s on_stop raised", sid)
+                _log.exception("strategy_on_stop_raised", strategy_id=sid)
         self._started = False
 
     # --- Dispatch ----------------------------------------------------------
@@ -218,8 +218,8 @@ class StrategyRegistry:
             signals = await handler(strategy, event, ctx)
         except Exception:
             _log.exception(
-                "strategy %s raised in handler; isolating", sid,
-                extra={"strategy_id": sid, "event_type": type(event).__name__},
+                "strategy_raised_in_handler_isolating",
+                strategy_id=sid, event_type=type(event).__name__,
             )
             return
         for signal in signals or ():

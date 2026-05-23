@@ -32,8 +32,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import signal
+import structlog
 import sys
 from decimal import Decimal
 
@@ -64,6 +64,7 @@ from trading.risk.rules import (
 )
 from trading.strategy import StrategyRegistry
 from trading.strategy.examples import MomentumStrategy
+from trading.logging import configure_logging
 
 
 def _build_instruments() -> list[Instrument]:
@@ -86,11 +87,8 @@ def _build_instruments() -> list[Instrument]:
 
 
 async def _amain(args: argparse.Namespace) -> int:
-    logging.basicConfig(
-        level=args.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    log = logging.getLogger("binance.testnet")
+    configure_logging(level=args.log_level)
+    log = structlog.get_logger("binance.testnet")
 
     # --- Config and creds ---------------------------------------------
     config = BinanceConfig(testnet=True, futures=True)
@@ -176,7 +174,7 @@ async def _amain(args: argparse.Namespace) -> int:
     )
 
     # --- Start everything ---------------------------------------------
-    log.info("starting binance testnet pipeline")
+    log.info("starting_binance_testnet_pipeline")
     await position.start()
     await risk.start()
     await oms.start()
@@ -193,7 +191,7 @@ async def _amain(args: argparse.Namespace) -> int:
     stop_event = asyncio.Event()
 
     def _on_signal() -> None:
-        log.info("shutdown signal received")
+        log.info("shutdown_signal_received")
         stop_event.set()
 
     loop = asyncio.get_running_loop()
@@ -206,7 +204,7 @@ async def _amain(args: argparse.Namespace) -> int:
     try:
         await stop_event.wait()
     finally:
-        log.info("stopping binance testnet pipeline")
+        log.info("stopping_binance_testnet_pipeline")
         await feed_handler.stop()
         try:
             await asyncio.wait_for(feed_task, timeout=5)
@@ -222,7 +220,7 @@ async def _amain(args: argparse.Namespace) -> int:
         await risk.stop()
         await position.stop()
         await bus.stop()
-        log.info("pipeline stopped")
+        log.info("pipeline_stopped")
     return 0
 
 

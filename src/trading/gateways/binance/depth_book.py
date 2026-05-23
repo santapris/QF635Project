@@ -25,7 +25,7 @@ from the core platform and handles the interleave logic.
 
 from __future__ import annotations
 
-import logging
+import structlog
 from collections import deque
 from decimal import Decimal
 from typing import Final
@@ -40,7 +40,7 @@ from ...feed_handler.order_book import L2OrderBook
 from .rest_client import BinanceRESTClient
 from .symbols import SymbolMapper
 
-_log = logging.getLogger(__name__)
+_log = structlog.get_logger(__name__)
 
 # Binance accepts limit values: 5, 10, 20, 50, 100, 500, 1000, 5000.
 _SNAPSHOT_LIMIT: Final[int] = 1000
@@ -146,9 +146,8 @@ class DepthBookManager:
                     # Snapshot was too stale even for the first applicable
                     # event — caller must re-bootstrap.
                     _log.warning(
-                        "depth snapshot too stale (last_update_id=%d, "
-                        "first usable event U=%d u=%d); aborting book",
-                        last_update_id, U, u,
+                        "depth_snapshot_too_stale_aborting_book",
+                        last_update_id=last_update_id, first_usable_U=U, first_usable_u=u,
                     )
                     self._book.reset()
                     self._last_u = None
@@ -180,8 +179,8 @@ class DepthBookManager:
             # caller to re-bootstrap.
             expected = self._last_u + 1
             _log.warning(
-                "depth diff gap: last_u=%d, incoming U=%d u=%d; resetting book",
-                self._last_u, U, u,
+                "depth_diff_gap_resetting_book",
+                last_u=self._last_u, incoming_U=U, incoming_u=u,
             )
             self._book.reset()
             self._last_u = None

@@ -14,6 +14,12 @@ from trading.core import (
     StrategyId,
 )
 from trading.event_bus import MemoryBus
+from trading.logging import configure_logging
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _configure_structlog() -> None:
+    configure_logging(level="DEBUG")
 
 
 @pytest.fixture
