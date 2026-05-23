@@ -17,6 +17,7 @@ from .schema import (
     SimGatewaySpec,
     StrategySpec,
 )
+from .settings import load_settings
 
 __all__ = [
     "AppConfig",
@@ -38,4 +39,5 @@ __all__ = [
     "build_live_app",
     "load_config",
     "load_config_from_dict",
+    "load_settings",
 ]

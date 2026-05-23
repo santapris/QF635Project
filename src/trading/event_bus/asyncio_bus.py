@@ -17,17 +17,18 @@ Design:
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Final
 
-from ..core.events import BaseEvent
-from ..core.exceptions import BackpressureError, EventBusError
-from .base import EventHandler
+import structlog
 
-_log = logging.getLogger(__name__)
+from trading.core.events import BaseEvent
+from trading.core.exceptions import BackpressureError, EventBusError
+from trading.event_bus.base import EventHandler
+
+log = structlog.get_logger(__name__)
 
 # A unique sentinel pushed onto consumer queues during shutdown. The type
 # annotation lies — Queue[BaseEvent] — but the consumer checks identity
@@ -40,13 +41,11 @@ ErrorCallback = Callable[[str, BaseEvent, BaseException], Awaitable[None] | None
 async def _default_error_callback(
     topic: str, event: BaseEvent, exc: BaseException
 ) -> None:
-    _log.exception(
-        "event handler raised",
-        extra={
-            "topic": topic,
-            "event_type": getattr(event, "event_type", "unknown"),
-            "event_id": str(getattr(event, "event_id", "")),
-        },
+    log.exception(
+        "event_handler_raised",
+        topic=topic,
+        event_type=getattr(event, "event_type", "unknown"),
+        event_id=str(getattr(event, "event_id", "")),
         exc_info=exc,
     )
 
@@ -153,9 +152,9 @@ class AsyncioBus:
                     timeout=5.0,
                 )
             except asyncio.TimeoutError:
-                _log.warning(
-                    "bus stop timed out; cancelling %d hung consumers",
-                    sum(1 for t in all_tasks if not t.done()),
+                log.warning(
+                    "bus_stop_timeout",
+                    hung_consumers=sum(1 for t in all_tasks if not t.done()),
                 )
                 for task in all_tasks:
                     if not task.done():
@@ -187,7 +186,7 @@ class AsyncioBus:
                     if asyncio.iscoroutine(result):
                         await result
                 except Exception:
-                    _log.exception("error callback itself raised")
+                    log.exception("error_callback_raised", topic=topic, handler=sub.name)
 
     # --- Diagnostics -------------------------------------------------------
 
