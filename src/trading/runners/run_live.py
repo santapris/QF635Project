@@ -1,14 +1,15 @@
 """Live / paper-trading runner.
 
+Generic entry point: paper vs. live is decided by the TOML's
+``[[order_gateways]]`` block (``type = "simulation"`` for paper,
+``type = "binance"`` for Binance, etc.).
+
 Usage:
     python -m trading.runners.run_live --config configs/paper_example.toml
+    python -m trading.runners.run_live --config configs/binance_testnet.toml
 
 Starts the wired-up app, then waits for SIGINT/SIGTERM. On shutdown signal,
 stops cleanly and exits.
-
-Note: with the current order_gateway set this runs as paper trading against the
-:class:`SimulationOrderGateway`. Wiring in a real exchange order_gateway is a swap
-of one config section once an adapter is implemented.
 """
 
 from __future__ import annotations
@@ -20,17 +21,17 @@ import structlog
 import sys
 from pathlib import Path
 
-from trading.config import build_live_app, load_config
+from trading.config import build_live_app, load_config, load_settings
 from trading.health import HealthServer
 from trading.logging import configure_logging
 from trading.monitoring import DashboardServer
 
 
-def _parse_args(argv: list[str]) -> argparse.Namespace:
+def _parse_args(argv: list[str], settings) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run the live trading app.")
     p.add_argument("--config", "-c", type=Path, required=True)
     p.add_argument(
-        "--log-level", default="INFO",
+        "--log-level", default=settings.log_level,
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
     p.add_argument(
@@ -38,7 +39,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Port for /healthz and /metrics HTTP server (0 = disabled).",
     )
     p.add_argument(
-        "--dashboard-port", type=int, default=8765,
+        "--dashboard-port", type=int, default=settings.dashboard_port,
         help="Port for the real-time dashboard WebSocket server (0 = disabled).",
     )
     return p.parse_args(argv)
@@ -89,7 +90,8 @@ async def _amain(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv if argv is not None else sys.argv[1:])
+    settings = load_settings()
+    args = _parse_args(argv if argv is not None else sys.argv[1:], settings)
     return asyncio.run(_amain(args))
 
 

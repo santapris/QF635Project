@@ -4,7 +4,7 @@ Logs every normalised tick (QuoteTick, TradeTick) to stdout.
 No strategy, no risk, no orders.
 
 Run:
-    python -m trading.runners.stage1_market_data
+    python -m trading.runners.examples.stage1_market_data
 """
 
 from __future__ import annotations
@@ -12,22 +12,17 @@ from __future__ import annotations
 import asyncio
 import signal
 import structlog
-from decimal import Decimal
 
-from trading.core import AssetType, Instrument, LiveClock
+from trading.core import LiveClock
 from trading.event_bus import AsyncioBus, Topic
 from trading.feed_handler import FeedHandler, FeedHandlerConfig
 from trading.feed_handler.normalizers import BinanceNormalizer
-from trading.order_gateways.binance import (
-    BinanceConfig,
-    BinanceCredentials,
-    BinancePublicWSConnector,
-    SymbolMapper,
-)
+from trading.order_gateways.binance import BinancePublicWSConnector, SymbolMapper
 from trading.order_gateways.binance import stream_names
 from trading.logging import configure_logging
 from trading.config import load_settings
 from trading.monitoring import BusHeartbeat, DashboardServer
+from trading.runners.examples._runner_config import load_runner_config
 
 
 async def _amain() -> None:
@@ -35,20 +30,12 @@ async def _amain() -> None:
     log = structlog.get_logger("stage1")
 
     settings = load_settings()
-    config = BinanceConfig.from_settings(settings)
-
-    instruments = [
-        Instrument(
-            symbol="BTC-USDT",
-            exchange="BINANCE",
-            asset_type=AssetType.FUTURES,
-            base_currency="BTC",
-            quote_currency="USDT",
-            tick_size=Decimal("0.01"),
-            lot_size=Decimal("0.00001"),
-            min_notional=Decimal("10"),
-        ),
-    ]
+    runner_cfg = load_runner_config(
+        require_credentials=False,
+        futures=settings.market == "futures",
+    )
+    config = runner_cfg.binance
+    instruments = runner_cfg.instruments
     symbols = SymbolMapper(instruments)
     clock = LiveClock()
     bus = AsyncioBus(queue_size=10_000)

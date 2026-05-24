@@ -123,11 +123,11 @@ class SimOrderGatewaySpec(BaseModel):
 
 
 class BinanceOrderGatewaySpec(BaseModel):
-    """Real Binance Spot order_gateway.
+    """Binance order_gateway config.
 
-    API credentials are read from the environment — never from TOML.
-    Set ``BINANCE_TESTNET_API_KEY`` / ``BINANCE_TESTNET_API_SECRET`` for testnet,
-    or ``BINANCE_API_KEY`` / ``BINANCE_API_SECRET`` for live.
+    ``credentials_env`` names the env-var prefix; the builder reads
+    ``{credentials_env}_API_KEY`` and ``{credentials_env}_API_SECRET``.
+    URL fields default to testnet or live endpoints based on ``testnet``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -135,8 +135,14 @@ class BinanceOrderGatewaySpec(BaseModel):
     venue: str = "BINANCE"
     type: Literal["binance"]
     testnet: bool = True
+    credentials_env: str = "BINANCE"
     reconcile_interval_seconds: float = 60.0
     mismatch_threshold: str = "0.0001"
+
+    spot_rest_base: str | None = None
+    spot_ws_base: str | None = None
+    futures_rest_base: str | None = None
+    futures_ws_base: str | None = None
 
 
 # Discriminated union — Pydantic selects the right model via the ``type`` field.

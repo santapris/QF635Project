@@ -14,7 +14,7 @@ End-to-end wiring:
 - A simple momentum strategy on BTC-USDT for demonstration.
 
 To run:
-    python -m trading.runners.run_binance_testnet
+    python -m trading.runners.examples.binance_testnet
 
 This is a long-running process — Ctrl-C to stop. The first run should
 fire signals when EMA fast/slow cross; you'll see ack/fill events in
@@ -30,14 +30,12 @@ import signal
 import structlog
 from decimal import Decimal
 
-from trading.core import AssetType, Instrument, LiveClock, StrategyId
+from trading.core import LiveClock, StrategyId
 from trading.event_bus import AsyncioBus
 from trading.feed_handler import FeedHandler, FeedHandlerConfig
 from trading.feed_handler.normalizers import BinanceNormalizer
 from trading.order_gateways.binance import (
     BalanceReconciler,
-    BinanceConfig,
-    BinanceCredentials,
     BinanceOrderGateway,
     BinancePublicWSConnector,
     BinanceRESTClient,
@@ -59,25 +57,7 @@ from trading.strategy import StrategyRegistry
 from trading.strategy.examples import MomentumStrategy
 from trading.config import load_settings
 from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
-
-
-def _build_instruments() -> list[Instrument]:
-    """The set of instruments this run cares about.
-
-    For more, add to this list and update the feed-handler streams.
-    """
-    return [
-        Instrument(
-            symbol="BTC-USDT",
-            exchange="BINANCE",
-            asset_type=AssetType.FUTURES,
-            base_currency="BTC",
-            quote_currency="USDT",
-            tick_size=Decimal("0.01"),
-            lot_size=Decimal("0.00001"),
-            min_notional=Decimal("10"),  # Binance testnet typical minimum
-        ),
-    ]
+from trading.runners.examples._runner_config import load_runner_config
 
 
 async def _amain() -> int:
@@ -85,10 +65,14 @@ async def _amain() -> int:
 
     # --- Config and creds ---------------------------------------------
     settings = load_settings()
-    config = BinanceConfig.from_settings(settings)
-    credentials = BinanceCredentials(api_key=settings.api_key, api_secret=settings.api_secret)
-
-    instruments = _build_instruments()
+    runner_cfg = load_runner_config(
+        require_credentials=True,
+        futures=settings.market == "futures",
+    )
+    config = runner_cfg.binance
+    credentials = runner_cfg.credentials
+    instruments = runner_cfg.instruments
+    assert credentials is not None  # require_credentials=True guarantees this
     symbols = SymbolMapper(instruments)
     clock = LiveClock()
 

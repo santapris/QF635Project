@@ -1,0 +1,26 @@
+# Shared config for the stage1-4 example runners and run_binance_testnet.
+# Holds the Binance testnet endpoints and the demo BTC-USDT futures instrument.
+
+[[instruments]]
+symbol = "BTC-USDT"
+exchange = "BINANCE"
+asset_type = "FUTURES"
+base_currency = "BTC"
+quote_currency = "USDT"
+tick_size = "0.01"
+lot_size = "0.00001"
+min_notional = "10"
+
+[bus]
+backend = "asyncio"
+queue_size = 10000
+
+[[order_gateways]]
+type = "binance"
+venue = "BINANCE"
+testnet = true
+credentials_env = "BINANCE_TESTNET"
+spot_rest_base = "https://testnet.binance.vision"
+spot_ws_base = "wss://testnet.binance.vision"
+futures_rest_base = "https://demo-fapi.binance.com"
+futures_ws_base = "wss://fstream.binancefuture.com"

@@ -2,10 +2,6 @@
 
 Endpoints come from Binance docs (subject to change — verify against
 https://binance-docs.github.io/apidocs/spot/en/ before live use).
-
-URLs are loaded from environment-aware settings (dev → testnet, prod → live).
-No URLs are hardcoded here — settings inject the correct endpoints for the
-current environment.
 """
 
 from __future__ import annotations
@@ -22,13 +18,7 @@ class BinanceCredentials:
 
 @dataclass(frozen=True, slots=True)
 class BinanceConfig:
-    """Adapter configuration.
-
-    All endpoint URLs are provided explicitly (typically via settings)
-    so that dev/testnet and prod/live are resolved before this object
-    is created. There is no ``testnet`` flag — the caller decides which
-    URLs to pass.
-    """
+    """Adapter configuration."""
 
     spot_rest_base: str
     spot_ws_base: str
@@ -55,29 +45,6 @@ class BinanceConfig:
 
     reconcile_interval_seconds: float = 60.0
     """How often the balance reconciler polls the account endpoint."""
-
-    @classmethod
-    def from_settings(cls, settings, **kwargs) -> "BinanceConfig":
-        """Create BinanceConfig from a settings object.
-
-        The settings object is expected to provide the four base URL
-        fields (spot_rest_base, spot_ws_base, futures_rest_base,
-        futures_ws_base) and an optional ``market`` field that
-        determines whether to use futures vs spot.
-        """
-        _futures = (
-            kwargs.pop("futures", None)
-            if "futures" in kwargs
-            else (getattr(settings, "market", "spot") == "futures")
-        )
-        return cls(
-            spot_rest_base=settings.spot_rest_base,
-            spot_ws_base=settings.spot_ws_base,
-            futures_rest_base=settings.futures_rest_base,
-            futures_ws_base=settings.futures_ws_base,
-            futures=_futures,
-            **kwargs,
-        )
 
     @property
     def api_prefix(self) -> str:

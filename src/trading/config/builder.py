@@ -20,6 +20,8 @@ needs :class:`SimulationOrderGateway` (asyncio-sleep latency). Backtest needs
 
 from __future__ import annotations
 
+import os
+
 import structlog
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -81,9 +83,21 @@ from .schema import (
     SimOrderGatewaySpec,
     StrategySpec,
 )
-from .settings import load_settings
-
 _log = structlog.get_logger(__name__)
+
+
+_BINANCE_URLS_TESTNET = {
+    "spot_rest_base": "https://testnet.binance.vision",
+    "spot_ws_base": "wss://testnet.binance.vision",
+    "futures_rest_base": "https://demo-fapi.binance.com",
+    "futures_ws_base": "wss://fstream.binancefuture.com",
+}
+_BINANCE_URLS_LIVE = {
+    "spot_rest_base": "https://api.binance.com",
+    "spot_ws_base": "wss://stream.binance.com:9443",
+    "futures_rest_base": "https://fapi.binance.com",
+    "futures_ws_base": "wss://fstream.binance.com",
+}
 
 
 # --- Helpers ----------------------------------------------------------------
@@ -211,23 +225,28 @@ def _build_binance_components(
     BinanceUserDataStream, BalanceReconciler].  The caller is responsible
     for starting and stopping them in order.
 
-    Credentials are read from environment variables at build time; the
-    process must have the right env set before calling this.
-
-    URLs are read from the environment-aware settings so that dev and prod
-    can point at different endpoints without code changes.
+    URLs and credentials come from the venue ``spec``. Credentials are read
+    from ``{spec.credentials_env}_API_KEY`` / ``_API_SECRET`` in the process
+    env.
     """
-    settings = load_settings()
-    cfg = BinanceConfig.from_settings(
-        settings,
+    defaults = _BINANCE_URLS_TESTNET if spec.testnet else _BINANCE_URLS_LIVE
+    cfg = BinanceConfig(
+        spot_rest_base=spec.spot_rest_base or defaults["spot_rest_base"],
+        spot_ws_base=spec.spot_ws_base or defaults["spot_ws_base"],
+        futures_rest_base=spec.futures_rest_base or defaults["futures_rest_base"],
+        futures_ws_base=spec.futures_ws_base or defaults["futures_ws_base"],
         reconcile_interval_seconds=spec.reconcile_interval_seconds,
     )
-    if not settings.api_key or not settings.api_secret:
+    key_var = f"{spec.credentials_env}_API_KEY"
+    secret_var = f"{spec.credentials_env}_API_SECRET"
+    api_key = os.environ.get(key_var)
+    api_secret = os.environ.get(secret_var)
+    if not api_key or not api_secret:
         raise ConfigError(
-            "missing Binance API credentials; set BINANCE_API_KEY and "
-            "BINANCE_API_SECRET in the environment or vault"
+            f"missing Binance API credentials; set {key_var} and {secret_var} "
+            "in the environment"
         )
-    creds = BinanceCredentials(api_key=settings.api_key, api_secret=settings.api_secret)
+    creds = BinanceCredentials(api_key=api_key, api_secret=api_secret)
     venue_insts = [i for i in instruments.values() if i.exchange == spec.venue]
     if not venue_insts:
         raise ConfigError(

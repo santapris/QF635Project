@@ -17,7 +17,7 @@ from .schema import (
     SimOrderGatewaySpec,
     StrategySpec,
 )
-from .settings import load_settings
+from .settings import Settings, load_settings
 
 __all__ = [
     "AppConfig",
@@ -33,6 +33,7 @@ __all__ = [
     "PositionSpec",
     "RiskSpec",
     "RuleSpec",
+    "Settings",
     "SimOrderGatewaySpec",
     "StrategySpec",
     "build_backtest_app",

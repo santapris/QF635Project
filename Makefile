@@ -57,19 +57,19 @@ run-paper:
 	$(PYTHON) -m trading.runners.run_live --config configs/paper_example.toml
 
 run-testnet:
-	$(PYTHON) -m trading.runners.run_binance_testnet
+	$(PYTHON) -m trading.runners.examples.binance_testnet
 
 run-stage1:
-	$(PYTHON) -m trading.runners.stage1_market_data
+	$(PYTHON) -m trading.runners.examples.stage1_market_data
 
 run-stage2:
-	$(PYTHON) -m trading.runners.stage2_strategy_signals
+	$(PYTHON) -m trading.runners.examples.stage2_strategy_signals
 
 run-stage3:
-	$(PYTHON) -m trading.runners.stage3_risk_oms
+	$(PYTHON) -m trading.runners.examples.stage3_risk_oms
 
 run-stage4:
-	$(PYTHON) -m trading.runners.stage4_order_gateway
+	$(PYTHON) -m trading.runners.examples.stage4_order_gateway
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
