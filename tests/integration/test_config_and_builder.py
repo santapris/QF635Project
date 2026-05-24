@@ -80,11 +80,13 @@ def test_load_config_rejects_unknown_field(tmp_path) -> None:
         load_config_from_dict(bad)
 
 
-def test_load_config_rejects_unknown_strategy_type(tmp_path) -> None:
+def test_build_rejects_unknown_strategy_type(tmp_path) -> None:
     bad = _config_dict(tmp_path)
     bad["strategies"][0]["type"] = "definitely_not_a_strategy"
-    with pytest.raises(ConfigError):
-        load_config_from_dict(bad)
+    bad["order_gateways"][0]["type"] = "simulation"  # live builder needs sim, not backtest
+    cfg = load_config_from_dict(bad)
+    with pytest.raises(ConfigError, match="unknown strategy type"):
+        build_live_app(cfg)
 
 
 def test_env_overrides_apply(tmp_path, monkeypatch) -> None:

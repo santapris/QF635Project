@@ -1,30 +1,27 @@
 """Top-level configuration schema.
 
-All app configuration is one Pydantic model tree. Loaders (TOML, env) hydrate
-this tree; runners consume it. Validation happens once at load time — by the
-time a runner is wiring components, every field is known-good.
-
-The schema is intentionally explicit. No magic defaults that vary by environment;
-no "we'll figure out a sensible value." If a knob matters it's spelled out.
+Generic by design: nothing in this file names a specific exchange,
+strategy, or risk rule. The ``type`` field on each component spec is an
+open string; the matching plugin lives next to its implementation and
+registers itself with ``trading.plugins``.
 """
 
 from __future__ import annotations
 
-from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Literal, Union
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..core.instruments import InstrumentSpec
 from ..core.types import StrategyId
 
 
 class BusBackend(str, Enum):
-    MEMORY = "memory"      # for tests
-    ASYNCIO = "asyncio"    # single-process production
-    KAFKA = "kafka"        # multi-process production
+    MEMORY = "memory"
+    ASYNCIO = "asyncio"
+    KAFKA = "kafka"
 
 
 class BusConfig(BaseModel):
@@ -33,17 +30,13 @@ class BusConfig(BaseModel):
     backend: BusBackend = BusBackend.ASYNCIO
     queue_size: int = Field(default=10_000, gt=0)
 
-    # Kafka-only fields. Validated below to require them when backend=kafka.
     bootstrap_servers: str | None = None
     client_id: str | None = None
     topic_prefix: str = "trading"
 
     @field_validator("bootstrap_servers", "client_id")
     @classmethod
-    def _require_for_kafka(cls, v: str | None, info) -> str | None:
-        # We can't see ``backend`` here in a per-field validator without
-        # cross-field info. The runner does the final cross-field check;
-        # this validator just normalises empty strings to None.
+    def _normalize_empty(cls, v: str | None, info) -> str | None:
         return v or None
 
 
@@ -59,30 +52,50 @@ class FeedHandlerSpec(BaseModel):
     backoff_max_seconds: float = 60.0
 
 
+def _collect_extras_into(field_name: str, *reserved: str):
+    """Build a pre-validator that scoops unknown keys into ``field_name``.
+
+    Lets TOML stay flat (``maker_bps = 1.0`` at the gateway top level)
+    while the internal model holds a tidy ``params: dict`` underneath.
+    """
+
+    reserved_set = set(reserved) | {field_name}
+
+    def _validator(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        bucket: dict[str, Any] = dict(data.get(field_name) or {})
+        out: dict[str, Any] = {}
+        for k, v in data.items():
+            if k in reserved_set:
+                out[k] = v
+            else:
+                bucket[k] = v
+        out[field_name] = bucket
+        return out
+
+    return _validator
+
+
 class StrategySpec(BaseModel):
+    """One strategy. ``type`` selects the plugin; ``parameters`` are passed verbatim."""
+
     model_config = ConfigDict(extra="forbid")
 
     strategy_id: StrategyId
-    type: Literal["momentum", "mean_reversion", "market_making"]
+    type: str
     instruments: list[str] = Field(..., description="Instrument IDs (venue:symbol).")
     enabled: bool = True
-    parameters: dict[str, str] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class RuleSpec(BaseModel):
-    """One risk rule. ``type`` discriminates; ``params`` are passed verbatim."""
+    """One risk rule. ``type`` selects the plugin; ``params`` are passed verbatim."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal[
-        "max_position",
-        "max_order_size",
-        "max_notional",
-        "throttle",
-        "daily_loss_limit",
-        "instrument_allowlist",
-    ]
-    params: dict[str, str] = Field(default_factory=dict)
+    type: str
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class RiskSpec(BaseModel):
@@ -103,53 +116,29 @@ class PositionSpec(BaseModel):
     mark_to_market_interval_seconds: float = 5.0
 
 
-class SimOrderGatewaySpec(BaseModel):
-    """Simulation or backtest order_gateway (no real exchange connection)."""
+class GatewaySpec(BaseModel):
+    """One order gateway. ``type`` selects the plugin; ``params`` are passed verbatim.
 
-    model_config = ConfigDict(extra="forbid")
+    Top-level keys that aren't reserved (``type``, ``venue``, ``params``) are
+    rolled into ``params`` so TOML can stay flat:
 
-    venue: str
-    type: Literal["simulation", "backtest"] = "simulation"
+    ::
 
-    # Simulation/Backtest config — all optional with sensible defaults.
-    maker_bps: float = 1.0
-    taker_bps: float = 5.0
-    submit_ack_ms: float = 5.0
-    cancel_ack_ms: float = 5.0
-    fill_ms: float = 10.0
-    slippage_ticks: int = 0
-    partial_fill_probability: float = 0.0
-    seed: int | None = None
-
-
-class BinanceOrderGatewaySpec(BaseModel):
-    """Binance order_gateway config.
-
-    ``credentials_env`` names the env-var prefix; the builder reads
-    ``{credentials_env}_API_KEY`` and ``{credentials_env}_API_SECRET``.
-    URL fields default to testnet or live endpoints based on ``testnet``.
+        [[order_gateways]]
+        type = "binance"
+        venue = "BINANCE"
+        testnet = true        # becomes params.testnet
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    venue: str = "BINANCE"
-    type: Literal["binance"]
-    testnet: bool = True
-    credentials_env: str = "BINANCE"
-    reconcile_interval_seconds: float = 60.0
-    mismatch_threshold: str = "0.0001"
+    type: str
+    venue: str
+    params: dict[str, Any] = Field(default_factory=dict)
 
-    spot_rest_base: str | None = None
-    spot_ws_base: str | None = None
-    futures_rest_base: str | None = None
-    futures_ws_base: str | None = None
-
-
-# Discriminated union — Pydantic selects the right model via the ``type`` field.
-OrderGatewaySpec = Annotated[
-    Union[SimOrderGatewaySpec, BinanceOrderGatewaySpec],
-    Field(discriminator="type"),
-]
+    _collect = model_validator(mode="before")(
+        _collect_extras_into("params", "type", "venue")
+    )
 
 
 class BacktestSpec(BaseModel):
@@ -175,22 +164,20 @@ class AppConfig(BaseModel):
     risk: RiskSpec = Field(default_factory=RiskSpec)
     oms: OMSSpec = Field(default_factory=OMSSpec)
     position: PositionSpec = Field(default_factory=PositionSpec)
-    order_gateways: list[OrderGatewaySpec] = Field(default_factory=list)
+    order_gateways: list[GatewaySpec] = Field(default_factory=list)
     backtest: BacktestSpec | None = None
 
 
 __all__ = [
     "AppConfig",
     "BacktestSpec",
-    "BinanceOrderGatewaySpec",
     "BusBackend",
     "BusConfig",
     "FeedHandlerSpec",
-    "OrderGatewaySpec",
+    "GatewaySpec",
     "OMSSpec",
     "PositionSpec",
     "RiskSpec",
     "RuleSpec",
-    "SimOrderGatewaySpec",
     "StrategySpec",
 ]

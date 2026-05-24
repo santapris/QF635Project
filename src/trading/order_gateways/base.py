@@ -50,6 +50,14 @@ class AbstractOrderGateway(ABC):
     async def stop(self) -> None:
         """Shut down cleanly: drain pending, disconnect, release resources."""
 
+    async def cancel_stale_orders(self) -> int:
+        """Cancel orders left over from a previous session. Returns count.
+
+        Default implementation does nothing (returns 0). Venues that persist
+        order state across runs override this to clean up before trading.
+        """
+        return 0
+
 
 class AbstractOrderGatewayRegistry(ABC):
     """Routes order events to the order_gateway that owns the relevant instrument.

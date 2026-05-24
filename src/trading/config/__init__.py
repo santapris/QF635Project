@@ -1,20 +1,23 @@
-"""Configuration: schema, loader, builder."""
+"""Configuration: schema, loader, builder.
 
+Importing this package loads the built-in plugins via ``trading.plugins``,
+populating the gateway / strategy / rule registries the builder dispatches to.
+"""
+
+from .. import plugins  # noqa: F401 — triggers plugin registration
 from .builder import BacktestApp, LiveApp, build_backtest_app, build_live_app
 from .loader import load_config, load_config_from_dict
 from .schema import (
     AppConfig,
     BacktestSpec,
-    BinanceOrderGatewaySpec,
     BusBackend,
     BusConfig,
     FeedHandlerSpec,
-    OrderGatewaySpec,
+    GatewaySpec,
     OMSSpec,
     PositionSpec,
     RiskSpec,
     RuleSpec,
-    SimOrderGatewaySpec,
     StrategySpec,
 )
 from .settings import Settings, load_settings
@@ -23,18 +26,16 @@ __all__ = [
     "AppConfig",
     "BacktestApp",
     "BacktestSpec",
-    "BinanceOrderGatewaySpec",
     "BusBackend",
     "BusConfig",
     "FeedHandlerSpec",
-    "OrderGatewaySpec",
+    "GatewaySpec",
     "LiveApp",
     "OMSSpec",
     "PositionSpec",
     "RiskSpec",
     "RuleSpec",
     "Settings",
-    "SimOrderGatewaySpec",
     "StrategySpec",
     "build_backtest_app",
     "build_live_app",

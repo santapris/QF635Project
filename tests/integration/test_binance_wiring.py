@@ -1,40 +1,28 @@
-"""Batch 4: Binance order_gateway schema + builder wiring tests.
+"""Binance order_gateway schema + builder wiring tests.
 
-Tests:
-  4.1  BinanceOrderGatewaySpec parses from dict via AppConfig.
-  4.2  SimOrderGatewaySpec still parses; existing 'simulation'/'backtest' types unaffected.
-  4.3  OrderGatewaySpec union rejects unknown type.
-  4.4  OrderGatewaySpec union rejects extra fields on BinanceOrderGatewaySpec.
-  4.5  build_live_app wires BinanceOrderGateway when credentials are present.
-  4.6  build_live_app raises ConfigError when no instruments match the venue.
-  4.7  build_live_app with Binance spec raises RuntimeError when env creds missing.
-  4.8  LiveApp.extra_services is empty for simulation-only config.
-  4.9  LiveApp.order_gateways is typed AbstractOrderGateway (no longer SimulationOrderGateway only).
+Tests cover the open ``GatewaySpec`` + plugin dispatch model:
+  - Binance gateway parses via the open spec, dispatches to the Binance plugin.
+  - Simulation / backtest gateway types still parse and dispatch.
+  - Unknown ``type`` is rejected at build time.
+  - Unknown params on a Binance gateway are rejected by the plugin's Params model.
+  - build_live_app wires BinanceOrderGateway + its extra services.
+  - build_live_app raises when no instruments match the venue.
+  - build_live_app raises when credentials are missing.
+  - Simulation-only configs produce no extra services.
 """
 
 from __future__ import annotations
 
-import os
-from decimal import Decimal
-from pathlib import Path
-
 import pytest
 
 from trading.config import (
-    AppConfig,
-    BinanceOrderGatewaySpec,
-    OrderGatewaySpec,
-    SimOrderGatewaySpec,
+    GatewaySpec,
     build_live_app,
     load_config_from_dict,
 )
 from trading.core.exceptions import ConfigError
 from trading.order_gateways.base import AbstractOrderGateway
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _base_dict() -> dict:
     return {
@@ -48,72 +36,80 @@ def _base_dict() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 4.1  BinanceOrderGatewaySpec parses
+# Binance gateway parses via the open spec
 # ---------------------------------------------------------------------------
 
 def test_binance_order_gateway_spec_parses() -> None:
-    raw = {**_base_dict(), "order_gateways": [{"type": "binance", "testnet": True}]}
+    raw = {
+        **_base_dict(),
+        "order_gateways": [{"type": "binance", "venue": "BINANCE", "testnet": True}],
+    }
     cfg = load_config_from_dict(raw)
     assert len(cfg.order_gateways) == 1
     spec = cfg.order_gateways[0]
-    assert isinstance(spec, BinanceOrderGatewaySpec)
-    assert spec.testnet is True
+    assert isinstance(spec, GatewaySpec)
+    assert spec.type == "binance"
     assert spec.venue == "BINANCE"
-
-
-def test_binance_order_gateway_spec_defaults() -> None:
-    spec = BinanceOrderGatewaySpec(type="binance")
-    assert spec.testnet is True
-    assert spec.reconcile_interval_seconds == 60.0
-    assert spec.mismatch_threshold == "0.0001"
+    # `testnet` was a flat TOML key — collected into params by the model validator.
+    assert spec.params.get("testnet") is True
 
 
 # ---------------------------------------------------------------------------
-# 4.2  SimOrderGatewaySpec still parses for simulation and backtest types
+# Simulation / backtest gateway types parse and dispatch
 # ---------------------------------------------------------------------------
 
 def test_sim_order_gateway_spec_simulation_parses() -> None:
     raw = {**_base_dict(), "order_gateways": [{"venue": "SIM", "type": "simulation"}]}
     cfg = load_config_from_dict(raw)
-    assert isinstance(cfg.order_gateways[0], SimOrderGatewaySpec)
+    assert cfg.order_gateways[0].type == "simulation"
 
 
 def test_sim_order_gateway_spec_backtest_parses() -> None:
     raw = {**_base_dict(), "order_gateways": [{"venue": "SIM", "type": "backtest"}]}
     cfg = load_config_from_dict(raw)
-    assert isinstance(cfg.order_gateways[0], SimOrderGatewaySpec)
+    assert cfg.order_gateways[0].type == "backtest"
 
 
 # ---------------------------------------------------------------------------
-# 4.3  Unknown order_gateway type rejected
+# Unknown gateway type rejected at build time
 # ---------------------------------------------------------------------------
 
 def test_unknown_order_gateway_type_rejected() -> None:
     raw = {**_base_dict(), "order_gateways": [{"venue": "X", "type": "coinbase"}]}
-    with pytest.raises((ConfigError, Exception)):
-        load_config_from_dict(raw)
+    cfg = load_config_from_dict(raw)
+    with pytest.raises(ConfigError, match="unknown gateway type 'coinbase'"):
+        build_live_app(cfg)
 
 
 # ---------------------------------------------------------------------------
-# 4.4  Extra fields rejected on BinanceOrderGatewaySpec
+# Unknown params rejected by the Binance plugin's Params model
 # ---------------------------------------------------------------------------
 
-def test_binance_spec_rejects_extra_fields() -> None:
-    raw = {**_base_dict(), "order_gateways": [{"type": "binance", "maker_bps": 1.0}]}
-    with pytest.raises((ConfigError, Exception)):
-        load_config_from_dict(raw)
+def test_binance_spec_rejects_extra_params(monkeypatch) -> None:
+    monkeypatch.setenv("BINANCE_API_KEY", "k")
+    monkeypatch.setenv("BINANCE_API_SECRET", "s")
+    raw = {
+        **_base_dict(),
+        # `maker_bps` is a simulation field, not a Binance one — should fail.
+        "order_gateways": [{"type": "binance", "venue": "BINANCE", "maker_bps": 1.0}],
+    }
+    cfg = load_config_from_dict(raw)
+    with pytest.raises(ConfigError, match="invalid parameters for gateway"):
+        build_live_app(cfg)
 
 
 # ---------------------------------------------------------------------------
-# 4.5  build_live_app wires BinanceOrderGateway when creds present
+# build_live_app wires BinanceOrderGateway when creds present
 # ---------------------------------------------------------------------------
 
 def test_build_live_app_wires_binance_order_gateway(monkeypatch) -> None:
-    """With creds in env, build_live_app constructs a BinanceOrderGateway."""
     monkeypatch.setenv("BINANCE_API_KEY", "test-key")
     monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
 
-    raw = {**_base_dict(), "order_gateways": [{"type": "binance", "testnet": True}]}
+    raw = {
+        **_base_dict(),
+        "order_gateways": [{"type": "binance", "venue": "BINANCE", "testnet": True}],
+    }
     cfg = load_config_from_dict(raw)
     app = build_live_app(cfg)
 
@@ -121,9 +117,7 @@ def test_build_live_app_wires_binance_order_gateway(monkeypatch) -> None:
     from trading.order_gateways.binance.order_gateway import BinanceOrderGateway
     assert isinstance(app.order_gateways[0], BinanceOrderGateway)
 
-    # Three extra services: ListenKeyManager, BinanceUserDataStream, BalanceReconciler
     assert len(app.extra_services) == 3
-
     from trading.order_gateways.binance.listen_key import ListenKeyManager
     from trading.order_gateways.binance.user_data import BinanceUserDataStream
     from trading.order_gateways.binance.reconciler import BalanceReconciler
@@ -133,7 +127,7 @@ def test_build_live_app_wires_binance_order_gateway(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4.6  build_live_app raises when no instruments match the venue
+# build_live_app raises when no instruments match the venue
 # ---------------------------------------------------------------------------
 
 def test_build_live_app_binance_no_instruments_raises(monkeypatch) -> None:
@@ -155,21 +149,24 @@ def test_build_live_app_binance_no_instruments_raises(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4.7  Missing env creds raise ConfigError at build time
+# Missing env creds raise ConfigError at build time
 # ---------------------------------------------------------------------------
 
-def test_build_live_app_binance_missing_creds_raises(monkeypatch, tmp_path) -> None:
+def test_build_live_app_binance_missing_creds_raises(monkeypatch) -> None:
     monkeypatch.setenv("BINANCE_API_KEY", "")
     monkeypatch.setenv("BINANCE_API_SECRET", "")
 
-    raw = {**_base_dict(), "order_gateways": [{"type": "binance", "testnet": True}]}
+    raw = {
+        **_base_dict(),
+        "order_gateways": [{"type": "binance", "venue": "BINANCE", "testnet": True}],
+    }
     cfg = load_config_from_dict(raw)
     with pytest.raises(ConfigError, match="missing Binance API credentials"):
         build_live_app(cfg)
 
 
 # ---------------------------------------------------------------------------
-# 4.8  Simulation-only config: extra_services is empty
+# Simulation-only config: extra_services is empty
 # ---------------------------------------------------------------------------
 
 def test_build_live_app_sim_no_extra_services() -> None:
@@ -183,7 +180,7 @@ def test_build_live_app_sim_no_extra_services() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4.9  order_gateways list holds AbstractOrderGateway instances
+# order_gateways list holds AbstractOrderGateway instances
 # ---------------------------------------------------------------------------
 
 def test_live_app_order_gateways_are_abstract_order_gateway() -> None:

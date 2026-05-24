@@ -26,6 +26,7 @@
 | [components/order-gateways.md](components/order-gateways.md) | Order Gateways — exchange adapters, rate limiting |
 | [components/position.md](components/position.md) | Position & PnL Engine — inventory, cost basis, mark-to-market |
 | [components/backtest.md](components/backtest.md) | Backtest Engine — replay, simulated exchange, slippage models |
+| [components/plugins.md](components/plugins.md) | Plugins — registries that keep config/ generic and venue/strategy/rule code self-contained |
 
 ### Infrastructure
 | File | Contents |
