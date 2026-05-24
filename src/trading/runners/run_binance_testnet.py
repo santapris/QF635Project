@@ -31,7 +31,7 @@ import structlog
 from decimal import Decimal
 
 from trading.core import AssetType, Instrument, LiveClock, StrategyId
-from trading.event_bus import AsyncioBus, Topic
+from trading.event_bus import AsyncioBus
 from trading.feed_handler import FeedHandler, FeedHandlerConfig
 from trading.feed_handler.normalizers import BinanceNormalizer
 from trading.order_gateways.binance import (
@@ -58,7 +58,7 @@ from trading.risk.rules import (
 from trading.strategy import StrategyRegistry
 from trading.strategy.examples import MomentumStrategy
 from trading.config import load_settings
-from trading.monitoring import DashboardServer
+from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
 
 
 def _build_instruments() -> list[Instrument]:
@@ -174,6 +174,12 @@ async def _amain() -> int:
         else None
     )
 
+    # --- Event logging ------------------------------------------------
+    # Same subscriptions in every environment. Market data is intentionally
+    # excluded — see heartbeat below for the "is data flowing?" signal.
+    await subscribe_event_logging(bus, log)
+    heartbeat = BusHeartbeat(bus=bus, log=log)
+
     # --- Start everything ---------------------------------------------
     log.info("starting_binance_testnet_pipeline")
     await position.start()
@@ -186,6 +192,7 @@ async def _amain() -> int:
     await user_data.start()
     await reconciler.start()
     await bus.start()
+    await heartbeat.start()
     if dashboard is not None:
         await dashboard.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="binance-feed-handler")
@@ -208,6 +215,7 @@ async def _amain() -> int:
         await stop_event.wait()
     finally:
         log.info("stopping_binance_testnet_pipeline")
+        await heartbeat.stop()
         if dashboard is not None:
             await dashboard.stop()
         await feed_handler.stop()

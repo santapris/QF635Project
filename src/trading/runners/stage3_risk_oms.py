@@ -40,11 +40,11 @@ from trading.strategy import StrategyRegistry
 from trading.strategy.examples import PingPongStrategy
 from trading.logging import configure_logging
 from trading.config import load_settings
-from trading.monitoring import DashboardServer
+from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
 
 
 async def _amain() -> None:
-    configure_logging(level="DEBUG")
+    configure_logging(level="INFO")
     log = structlog.get_logger("stage3")
 
     settings = load_settings()
@@ -66,47 +66,10 @@ async def _amain() -> None:
     clock = LiveClock()
     bus = AsyncioBus(queue_size=10_000)
 
-    async def _log_market_data(event) -> None:
-        log.debug(
-            "market_data",
-            event_type=type(event).__name__,
-            instrument=str(getattr(event, "instrument_id", "?")),
-        )
-
-    async def _log_signal(event) -> None:
-        log.info(
-            "signal",
-            strategy=str(getattr(event, "strategy_id", "?")),
-            instrument=str(getattr(event, "instrument_id", "?")),
-            **{k: str(getattr(event, k)) for k in ("side", "quantity") if hasattr(event, k)},
-        )
-
-    async def _log_risk_decision(event) -> None:
-        log.info(
-            "risk_decision",
-            event_type=type(event).__name__,
-            **{
-                k: str(getattr(event, k))
-                for k in ("order_id", "reason", "rule")
-                if hasattr(event, k)
-            },
-        )
-
-    async def _log_order(event) -> None:
-        log.info(
-            "order",
-            event_type=type(event).__name__,
-            **{
-                k: str(getattr(event, k))
-                for k in ("order_id", "status", "side", "quantity", "price")
-                if hasattr(event, k)
-            },
-        )
-
-    await bus.subscribe(Topic.MARKET_DATA, _log_market_data)
-    await bus.subscribe(Topic.SIGNALS, _log_signal)
-    await bus.subscribe(Topic.RISK_DECISIONS, _log_risk_decision)
-    await bus.subscribe(Topic.ORDERS, _log_order)
+    await subscribe_event_logging(
+        bus, log,
+        topics=(Topic.SIGNALS, Topic.RISK_DECISIONS, Topic.ORDERS),
+    )
 
     position = PositionEngine(bus=bus, clock=clock, method=AccountingMethod.WAVG)
     risk = RiskEngine(bus=bus, clock=clock)
@@ -162,6 +125,7 @@ async def _amain() -> None:
         if settings.dashboard_port > 0
         else None
     )
+    heartbeat = BusHeartbeat(bus=bus, log=log)
 
     log.info(
         "stage3_starting",
@@ -172,6 +136,7 @@ async def _amain() -> None:
     await oms.start()
     await strategies.start()
     await bus.start()
+    await heartbeat.start()
     if dashboard is not None:
         await dashboard.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="feed-handler")
@@ -180,6 +145,7 @@ async def _amain() -> None:
         await stop_event.wait()
     finally:
         log.info("stage3_stopping")
+        await heartbeat.stop()
         if dashboard is not None:
             await dashboard.stop()
         await feed_handler.stop()

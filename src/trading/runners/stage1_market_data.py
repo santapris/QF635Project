@@ -27,11 +27,11 @@ from trading.order_gateways.binance import (
 from trading.order_gateways.binance import stream_names
 from trading.logging import configure_logging
 from trading.config import load_settings
-from trading.monitoring import DashboardServer
+from trading.monitoring import BusHeartbeat, DashboardServer
 
 
 async def _amain() -> None:
-    configure_logging(level="DEBUG")
+    configure_logging(level="INFO")
     log = structlog.get_logger("stage1")
 
     settings = load_settings()
@@ -99,9 +99,11 @@ async def _amain() -> None:
         if settings.dashboard_port > 0
         else None
     )
+    heartbeat = BusHeartbeat(bus=bus, log=log)
 
     log.info("stage1_starting", note="watching market-data topic — Ctrl-C to stop")
     await bus.start()
+    await heartbeat.start()
     if dashboard is not None:
         await dashboard.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="feed-handler")
@@ -110,6 +112,7 @@ async def _amain() -> None:
         await stop_event.wait()
     finally:
         log.info("stage1_stopping")
+        await heartbeat.stop()
         if dashboard is not None:
             await dashboard.stop()
         await feed_handler.stop()

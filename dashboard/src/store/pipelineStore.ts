@@ -111,6 +111,7 @@ export interface LogRow {
 export interface PipelineState {
   status: ConnectionStatus;
   ticks: Record<string, TickData>;          // instrument -> latest tick
+  tickHistory: TickData[];                  // rolling 200 — for tape view
   recentTrades: TradeData[];                // rolling 50
   signals: SignalRow[];                     // rolling 100
   riskDecisions: RiskRow[];                 // rolling 100
@@ -125,6 +126,7 @@ export interface PipelineState {
 export const initialState: PipelineState = {
   status: "connecting",
   ticks: {},
+  tickHistory: [],
   recentTrades: [],
   signals: [],
   riskDecisions: [],
@@ -172,6 +174,7 @@ export function pipelineReducer(
       return {
         ...state,
         ticks: { ...state.ticks, [action.payload.instrument]: action.payload },
+        tickHistory: cap(state.tickHistory, action.payload, 200),
       };
 
     case "TRADE":

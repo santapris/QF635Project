@@ -16,7 +16,11 @@ export default function DashboardPage({ state }: Props) {
     <Grid container spacing={2} sx={{ height: "100%" }}>
       {/* Top row: market data + PnL chart */}
       <Grid size={{ xs: 12, lg: 4 }} sx={{ minHeight: 220 }}>
-        <MarketDataPanel ticks={state.ticks} recentTrades={state.recentTrades} />
+        <MarketDataPanel
+          ticks={state.ticks}
+          tickHistory={state.tickHistory}
+          recentTrades={state.recentTrades}
+        />
       </Grid>
       <Grid size={{ xs: 12, lg: 8 }} sx={{ minHeight: 220 }}>
         <PnlChart pnlHistory={state.pnlHistory} />
