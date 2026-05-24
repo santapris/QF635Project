@@ -88,6 +88,17 @@ export interface PnlPoint {
   realized_pnl: number;
 }
 
+export interface AccountBalance {
+  asset: string;
+  free: string;
+  locked: string;
+}
+
+export interface AccountSnapshot {
+  ts: string;
+  balances: AccountBalance[];
+}
+
 export interface LogRow {
   id: string;
   ts: string;
@@ -107,6 +118,7 @@ export interface PipelineState {
   fills: FillRow[];                         // rolling 100
   positions: Record<string, PositionRow>;   // instrument -> latest position
   pnlHistory: PnlPoint[];                   // time-series for chart
+  account: AccountSnapshot | null;          // latest exchange account snapshot
   logs: LogRow[];                           // rolling 500
 }
 
@@ -120,6 +132,7 @@ export const initialState: PipelineState = {
   fills: [],
   positions: {},
   pnlHistory: [],
+  account: null,
   logs: [],
 };
 
@@ -132,11 +145,18 @@ export type PipelineAction =
   | { type: "ORDER"; payload: OrderRow }
   | { type: "FILL"; payload: FillRow }
   | { type: "POSITION"; payload: PositionRow }
+  | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
   | { type: "CLEAR_LOGS" };
 
 function cap<T>(arr: T[], item: T, limit: number): T[] {
   const next = [item, ...arr];
+  return next.length > limit ? next.slice(0, limit) : next;
+}
+
+function capDedup<T extends { id: string }>(arr: T[], item: T, limit: number): T[] {
+  const filtered = arr.filter((x) => x.id !== item.id);
+  const next = [item, ...filtered];
   return next.length > limit ? next.slice(0, limit) : next;
 }
 
@@ -164,7 +184,7 @@ export function pipelineReducer(
       return { ...state, riskDecisions: cap(state.riskDecisions, action.payload, 100) };
 
     case "ORDER":
-      return { ...state, orders: cap(state.orders, action.payload, 100) };
+      return { ...state, orders: capDedup(state.orders, action.payload, 100) };
 
     case "FILL": {
       const fill = action.payload;
@@ -193,6 +213,9 @@ export function pipelineReducer(
         pnlHistory: [...state.pnlHistory, pnlPoint].slice(-200),
       };
     }
+
+    case "ACCOUNT":
+      return { ...state, account: action.payload };
 
     case "LOG":
       return { ...state, logs: cap(state.logs, action.payload, 500) };

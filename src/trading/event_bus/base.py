@@ -38,6 +38,7 @@ class Topic:
     ORDERS: Final[str] = "orders"
     FILLS: Final[str] = "fills"
     POSITIONS: Final[str] = "positions"
+    ACCOUNT: Final[str] = "account"
     ALERTS: Final[str] = "alerts"
 
 

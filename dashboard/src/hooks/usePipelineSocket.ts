@@ -81,7 +81,7 @@ function parseMessage(raw: string): PipelineAction | null {
       return {
         type: "ORDER",
         payload: {
-          id,
+          id: `${String(data.order_id ?? "")}-${event_type}`,
           ts,
           event_type,
           order_id: String(data.order_id ?? ""),
@@ -128,6 +128,24 @@ function parseMessage(raw: string): PipelineAction | null {
         },
       };
 
+    case "account": {
+      const rawBalances = Array.isArray(data.balances) ? data.balances : [];
+      return {
+        type: "ACCOUNT",
+        payload: {
+          ts,
+          balances: rawBalances.map((b) => {
+            const bal = b as Record<string, unknown>;
+            return {
+              asset: String(bal.asset ?? ""),
+              free: String(bal.free ?? "0"),
+              locked: String(bal.locked ?? "0"),
+            };
+          }),
+        },
+      };
+    }
+
     case "logs": {
       const d = data as { level?: string; logger?: string; message?: string; extra?: Record<string,string> };
       return {
@@ -171,7 +189,7 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
     };
 
     ws.onclose = () => {
-      if (unmountedRef.current) return;
+      if (unmountedRef.current || wsRef.current !== ws) return;
       dispatch({ type: "SET_STATUS", payload: "reconnecting" });
       const delay = Math.min(backoffRef.current, MAX_BACKOFF_MS);
       backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF_MS);
@@ -188,7 +206,15 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
     connect();
     return () => {
       unmountedRef.current = true;
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      wsRef.current = null;
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.close();
+      }
     };
   }, [connect]);
 }

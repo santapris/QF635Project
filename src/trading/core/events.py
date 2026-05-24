@@ -301,6 +301,20 @@ class PnLSnapshotEvent(BaseEvent):
     net_exposure: Price
 
 
+class AccountBalance(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    asset: str
+    free: Price
+    locked: Price
+
+
+class AccountSnapshotEvent(BaseEvent):
+    """Exchange-reported account state (wallet balances)."""
+
+    event_type: Literal["account_snapshot"] = "account_snapshot"
+    balances: tuple[AccountBalance, ...]
+
+
 # --- Discriminated union ---------------------------------------------------
 # Use this when receiving events from a serialization layer (Kafka, etc.)
 # Pydantic will dispatch on ``event_type`` and instantiate the right class.
@@ -324,12 +338,15 @@ Event = Annotated[
         FillEvent,
         PositionUpdateEvent,
         PnLSnapshotEvent,
+        AccountSnapshotEvent,
     ],
     Field(discriminator="event_type"),
 ]
 
 
 __all__ = [
+    "AccountBalance",
+    "AccountSnapshotEvent",
     "AmendRequest",
     "BaseEvent",
     "CancelRequest",

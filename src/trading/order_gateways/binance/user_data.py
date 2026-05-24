@@ -36,6 +36,8 @@ except ImportError:  # pragma: no cover
 
 from ...core.clock import Clock
 from ...core.events import (
+    AccountBalance,
+    AccountSnapshotEvent,
     BaseEvent,
     FillEvent,
     OrderCancelled,
@@ -231,10 +233,7 @@ class BinanceUserDataStream:
         if event_type == "executionReport":
             await self._handle_execution_report(msg)
         elif event_type == "outboundAccountPosition":
-            # The balance reconciler (batch 4) consumes this. For now,
-            # ignore — we'll wire it through a topic when the reconciler
-            # lands.
-            pass
+            await self._handle_account_position(msg)
         elif event_type == "listKeyExpired":
             # Some Binance docs mention this; not always sent. The
             # listen-key keepalive normally prevents it. If it arrives,
@@ -384,6 +383,37 @@ class BinanceUserDataStream:
                 fee_currency=fee_currency,
                 is_maker=is_maker,
                 venue_trade_id=venue_trade_id,
+            ),
+        )
+
+    async def _handle_account_position(self, msg: dict) -> None:
+        """Publish an AccountSnapshotEvent from outboundAccountPosition.
+
+        Binance fields: ``B`` is the balances array; each entry has
+        ``a`` (asset), ``f`` (free), ``l`` (locked). ``E`` is event time (ms).
+        """
+        raw_balances = msg.get("B") or []
+        balances = tuple(
+            AccountBalance(
+                asset=str(b.get("a", "")),
+                free=Decimal(str(b.get("f", "0"))),
+                locked=Decimal(str(b.get("l", "0"))),
+            )
+            for b in raw_balances
+        )
+        event_time_ms = msg.get("E")
+        ts_event = (
+            Timestamp(int(event_time_ms) * 1_000_000)
+            if event_time_ms is not None
+            else self._clock.now_ns()
+        )
+        await self._bus.publish(
+            Topic.ACCOUNT,
+            AccountSnapshotEvent(
+                ts_event=ts_event,
+                ts_ingest=self._clock.now_ns(),
+                source="binance",
+                balances=balances,
             ),
         )
 

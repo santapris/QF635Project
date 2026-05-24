@@ -6,6 +6,7 @@ import Chip from "@mui/material/Chip";
 import Box from "@mui/material/Box";
 import { NavLink } from "react-router-dom";
 import type { ConnectionStatus } from "../store/pipelineStore";
+import ThemeToggle from "./ThemeToggle";
 
 const STATUS_COLOR: Record<ConnectionStatus, "success" | "warning" | "error" | "default"> = {
   connected: "success",
@@ -51,8 +52,9 @@ export default function NavBar({ status }: NavBarProps) {
           label={status}
           color={STATUS_COLOR[status]}
           size="small"
-          sx={{ fontWeight: 600, textTransform: "capitalize" }}
+          sx={{ fontWeight: 600, textTransform: "capitalize", mr: 1 }}
         />
+        <ThemeToggle />
       </Toolbar>
     </AppBar>
   );

@@ -67,6 +67,7 @@ _TOPICS = (
     Topic.ORDERS,
     Topic.FILLS,
     Topic.POSITIONS,
+    Topic.ACCOUNT,
     Topic.ALERTS,
 )
 
