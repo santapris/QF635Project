@@ -109,8 +109,8 @@ Implemented as a structlog processor injected at `configure_logging()` time — 
 
 ### Stack
 - **Vite** + **React 18** + **TypeScript**
-- **MUI (Material UI) v8** — layout, panels, header, status indicators
-- **MUI X DataGrid** (`@mui/x-data-grid`, community tier) — orders/fills and position tables
+- **MUI (Material UI) v9** — layout, panels, header, status indicators
+- **MUI X DataGrid v9** (`@mui/x-data-grid`, community tier) — orders/fills and position tables
 - **Recharts** — PnL line chart
 - **React Router v6** — client-side routing
 

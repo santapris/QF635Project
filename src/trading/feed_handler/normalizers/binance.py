@@ -53,8 +53,11 @@ class BinanceNormalizer(AbstractNormalizer):
         if event_kind == "trade":
             return self._handle_trade(msg, raw, instrument_lookup)
 
-        # bookTicker frames lack the ``e`` field. Detect by shape.
-        if event_kind is None and {"s", "b", "B", "a", "A"}.issubset(msg):
+        # Spot bookTicker frames lack the ``e`` field; futures bookTicker
+        # frames carry ``e == "bookTicker"``. Handle both.
+        if event_kind == "bookTicker" or (
+            event_kind is None and {"s", "b", "B", "a", "A"}.issubset(msg)
+        ):
             return self._handle_book_ticker(msg, raw, instrument_lookup)
 
         # Subscription confirmations, heartbeats, anything we don't

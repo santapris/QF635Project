@@ -1,4 +1,4 @@
-.PHONY: install install-dev install-kafka test test-unit test-integration lint format typecheck clean backtest run-paper help
+.PHONY: install install-dev install-kafka test test-unit test-integration lint format typecheck clean backtest run-paper run-testnet run-stage1 run-stage2 run-stage3 run-stage4 help
 
 PYTHON ?= python3
 
@@ -15,6 +15,11 @@ help:
 	@echo "  typecheck       Run mypy on the src tree"
 	@echo "  backtest        Run the example backtest"
 	@echo "  run-paper       Run the example paper-trading app (Ctrl-C to stop)"
+	@echo "  run-testnet     Run the Binance testnet live app"
+	@echo "  run-stage1      Run stage 1 (feed handler only)"
+	@echo "  run-stage2      Run stage 2 (+ strategy signals)"
+	@echo "  run-stage3      Run stage 3 (+ risk + OMS)"
+	@echo "  run-stage4      Run stage 4 (+ order gateway, sends orders to testnet)"
 	@echo "  clean           Remove caches and build artifacts"
 
 install:
@@ -50,6 +55,21 @@ backtest:
 
 run-paper:
 	$(PYTHON) -m trading.runners.run_live --config configs/paper_example.toml
+
+run-testnet:
+	$(PYTHON) -m trading.runners.run_binance_testnet
+
+run-stage1:
+	$(PYTHON) -m trading.runners.stage1_market_data
+
+run-stage2:
+	$(PYTHON) -m trading.runners.stage2_strategy_signals
+
+run-stage3:
+	$(PYTHON) -m trading.runners.stage3_risk_oms
+
+run-stage4:
+	$(PYTHON) -m trading.runners.stage4_order_gateway
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

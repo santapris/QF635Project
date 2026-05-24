@@ -71,6 +71,7 @@ from ..strategy.examples import (
     MomentumStrategy,
 )
 from ..health import HealthServer
+from ..monitoring import DashboardServer
 from .schema import (
     AppConfig,
     BinanceOrderGatewaySpec,
@@ -276,6 +277,8 @@ class LiveApp:
     extra_services: list = field(default_factory=list)
     # Optional HTTP health/metrics server.  None means disabled.
     health_server: HealthServer | None = None
+    # Optional real-time dashboard WebSocket server.  None means disabled.
+    dashboard_server: DashboardServer | None = None
 
     async def start(self) -> None:
         await self.position_engine.start()
@@ -300,8 +303,12 @@ class LiveApp:
             await self.bus.start()
         if self.health_server is not None:
             await self.health_server.start()
+        if self.dashboard_server is not None:
+            await self.dashboard_server.start()
 
     async def stop(self) -> None:
+        if self.dashboard_server is not None:
+            await self.dashboard_server.stop()
         if self.health_server is not None:
             await self.health_server.stop()
         if hasattr(self.bus, "stop"):

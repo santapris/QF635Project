@@ -27,6 +27,7 @@ from trading.order_gateways.binance import (
 from trading.order_gateways.binance import stream_names
 from trading.logging import configure_logging
 from trading.config import load_settings
+from trading.monitoring import DashboardServer
 
 
 async def _amain() -> None:
@@ -56,7 +57,7 @@ async def _amain() -> None:
         log.info(
             "market_data",
             event_type=type(event).__name__,
-            instrument=str(getattr(event, "instrument_id", "?")),
+            instrument=str(getattr(getattr(event, "instrument", None), "symbol", "?")),
             **{
                 k: str(getattr(event, k))
                 for k in ("bid_price", "ask_price", "price", "quantity")
@@ -93,14 +94,24 @@ async def _amain() -> None:
         except NotImplementedError:
             pass
 
+    dashboard = (
+        DashboardServer(bus=bus, port=settings.dashboard_port)
+        if settings.dashboard_port > 0
+        else None
+    )
+
     log.info("stage1_starting", note="watching market-data topic — Ctrl-C to stop")
     await bus.start()
+    if dashboard is not None:
+        await dashboard.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="feed-handler")
 
     try:
         await stop_event.wait()
     finally:
         log.info("stage1_stopping")
+        if dashboard is not None:
+            await dashboard.stop()
         await feed_handler.stop()
         try:
             await asyncio.wait_for(feed_task, timeout=5)

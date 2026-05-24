@@ -26,9 +26,10 @@ from trading.order_gateways.binance import (
 from trading.order_gateways.binance import stream_names
 from trading.position import AccountingMethod, EnginePortfolioView, PositionEngine
 from trading.strategy import StrategyRegistry
-from trading.strategy.examples import MomentumStrategy
+from trading.strategy.examples import PingPongStrategy
 from trading.logging import configure_logging
 from trading.config import load_settings
+from trading.monitoring import DashboardServer
 
 
 async def _amain() -> None:
@@ -86,13 +87,12 @@ async def _amain() -> None:
     portfolio = EnginePortfolioView(position)
     strategies = StrategyRegistry(bus=bus, clock=clock, portfolio=portfolio)
     strategies.register(
-        MomentumStrategy(
-            strategy_id=StrategyId("momentum"),
+        PingPongStrategy(
+            strategy_id=StrategyId("ping-pong"),
             instruments=instruments,
-            fast_period=20,
-            slow_period=50,
+            interval_seconds=10.0,
         ),
-        parameters={"target_quantity": "0.0001"},
+        parameters={"target_quantity": "0.0001", "interval_seconds": 10.0},
     )
 
     streams = []
@@ -122,21 +122,31 @@ async def _amain() -> None:
         except NotImplementedError:
             pass
 
+    dashboard = (
+        DashboardServer(bus=bus, port=settings.dashboard_port)
+        if settings.dashboard_port > 0
+        else None
+    )
+
     log.info(
         "stage2_starting",
         note="watching market-data + signals topics — Ctrl-C to stop",
-        fast_period=20,
-        slow_period=50,
+        strategy="ping-pong",
+        interval_seconds=10.0,
     )
     await position.start()
     await strategies.start()
     await bus.start()
+    if dashboard is not None:
+        await dashboard.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="feed-handler")
 
     try:
         await stop_event.wait()
     finally:
         log.info("stage2_stopping")
+        if dashboard is not None:
+            await dashboard.stop()
         await feed_handler.stop()
         try:
             await asyncio.wait_for(feed_task, timeout=5)

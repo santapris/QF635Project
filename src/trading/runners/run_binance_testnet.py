@@ -58,6 +58,7 @@ from trading.risk.rules import (
 from trading.strategy import StrategyRegistry
 from trading.strategy.examples import MomentumStrategy
 from trading.config import load_settings
+from trading.monitoring import DashboardServer
 
 
 def _build_instruments() -> list[Instrument]:
@@ -166,6 +167,13 @@ async def _amain() -> int:
         mismatch_threshold=Decimal("0.00001"),
     )
 
+    # --- Dashboard ----------------------------------------------------
+    dashboard = (
+        DashboardServer(bus=bus, port=settings.dashboard_port)
+        if settings.dashboard_port > 0
+        else None
+    )
+
     # --- Start everything ---------------------------------------------
     log.info("starting_binance_testnet_pipeline")
     await position.start()
@@ -178,6 +186,8 @@ async def _amain() -> int:
     await user_data.start()
     await reconciler.start()
     await bus.start()
+    if dashboard is not None:
+        await dashboard.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="binance-feed-handler")
 
     # --- Shutdown handling --------------------------------------------
@@ -198,6 +208,8 @@ async def _amain() -> int:
         await stop_event.wait()
     finally:
         log.info("stopping_binance_testnet_pipeline")
+        if dashboard is not None:
+            await dashboard.stop()
         await feed_handler.stop()
         try:
             await asyncio.wait_for(feed_task, timeout=5)

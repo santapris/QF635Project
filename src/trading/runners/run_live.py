@@ -23,6 +23,7 @@ from pathlib import Path
 from trading.config import build_live_app, load_config
 from trading.health import HealthServer
 from trading.logging import configure_logging
+from trading.monitoring import DashboardServer
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -35,6 +36,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument(
         "--health-port", type=int, default=9090,
         help="Port for /healthz and /metrics HTTP server (0 = disabled).",
+    )
+    p.add_argument(
+        "--dashboard-port", type=int, default=8765,
+        help="Port for the real-time dashboard WebSocket server (0 = disabled).",
     )
     return p.parse_args(argv)
 
@@ -50,6 +55,11 @@ async def _amain(args: argparse.Namespace) -> int:
         app.health_server = HealthServer(
             metrics_fn=app.metrics_snapshot,
             port=args.health_port,
+        )
+    if args.dashboard_port > 0:
+        app.dashboard_server = DashboardServer(
+            bus=app.bus,
+            port=args.dashboard_port,
         )
 
     await app.start()

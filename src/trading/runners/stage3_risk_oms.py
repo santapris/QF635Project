@@ -37,9 +37,10 @@ from trading.risk.rules import (
     MaxPositionRule,
 )
 from trading.strategy import StrategyRegistry
-from trading.strategy.examples import MomentumStrategy
+from trading.strategy.examples import PingPongStrategy
 from trading.logging import configure_logging
 from trading.config import load_settings
+from trading.monitoring import DashboardServer
 
 
 async def _amain() -> None:
@@ -112,7 +113,7 @@ async def _amain() -> None:
     risk.register_global_rules([
         InstrumentAllowlistRule(allowed_instrument_ids=["BINANCE:BTC-USDT"]),
     ])
-    risk.register_rules(StrategyId("momentum"), [
+    risk.register_rules(StrategyId("ping-pong"), [
         MaxPositionRule(max_long=Decimal("0.001"), max_short=Decimal("0.001")),
         MaxOrderSizeRule(max_quantity=Decimal("0.001")),
         DailyLossLimitRule(max_loss=Decimal("50")),
@@ -121,13 +122,12 @@ async def _amain() -> None:
     portfolio = EnginePortfolioView(position)
     strategies = StrategyRegistry(bus=bus, clock=clock, portfolio=portfolio)
     strategies.register(
-        MomentumStrategy(
-            strategy_id=StrategyId("momentum"),
+        PingPongStrategy(
+            strategy_id=StrategyId("ping-pong"),
             instruments=instruments,
-            fast_period=20,
-            slow_period=50,
+            interval_seconds=10.0,
         ),
-        parameters={"target_quantity": "0.0001"},
+        parameters={"target_quantity": "0.0001", "interval_seconds": 10.0},
     )
 
     streams = []
@@ -157,6 +157,12 @@ async def _amain() -> None:
         except NotImplementedError:
             pass
 
+    dashboard = (
+        DashboardServer(bus=bus, port=settings.dashboard_port)
+        if settings.dashboard_port > 0
+        else None
+    )
+
     log.info(
         "stage3_starting",
         note="risk+OMS active, no gateway — orders will NOT reach exchange — Ctrl-C to stop",
@@ -166,12 +172,16 @@ async def _amain() -> None:
     await oms.start()
     await strategies.start()
     await bus.start()
+    if dashboard is not None:
+        await dashboard.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="feed-handler")
 
     try:
         await stop_event.wait()
     finally:
         log.info("stage3_stopping")
+        if dashboard is not None:
+            await dashboard.stop()
         await feed_handler.stop()
         try:
             await asyncio.wait_for(feed_task, timeout=5)
