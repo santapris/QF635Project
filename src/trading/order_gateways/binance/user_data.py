@@ -180,6 +180,7 @@ class BinanceUserDataStream:
                 max_size=2**20,
                 close_timeout=5,
             ) as ws:
+                _log.info("binance_user_data_ws_connected", url=url)
                 # Race the WS message loop against the listen-key recreation
                 # event. If the key gets recreated (expiry recovery), we
                 # tear down this session and the outer loop reconnects.
@@ -234,6 +235,20 @@ class BinanceUserDataStream:
             await self._handle_execution_report(msg)
         elif event_type == "outboundAccountPosition":
             await self._handle_account_position(msg)
+        elif event_type == "ORDER_TRADE_UPDATE":
+            # Futures: order fields are nested under "o". Hoist event time
+            # ("E") and transaction time ("T") so downstream parsing matches
+            # the spot layout.
+            order = dict(msg.get("o", {}))
+            order.setdefault("E", msg.get("E"))
+            order.setdefault("T", order.get("T", msg.get("T", msg.get("E"))))
+            await self._handle_execution_report(order)
+        elif event_type == "ACCOUNT_UPDATE":
+            await self._handle_futures_account_update(msg)
+        elif event_type == "TRADE_LITE":
+            # Lightweight duplicate of the order's TRADE — full data still
+            # arrives on ORDER_TRADE_UPDATE. Skip silently.
+            pass
         elif event_type == "listKeyExpired":
             # Some Binance docs mention this; not always sent. The
             # listen-key keepalive normally prevents it. If it arrives,
@@ -398,6 +413,40 @@ class BinanceUserDataStream:
                 asset=str(b.get("a", "")),
                 free=Decimal(str(b.get("f", "0"))),
                 locked=Decimal(str(b.get("l", "0"))),
+            )
+            for b in raw_balances
+        )
+        event_time_ms = msg.get("E")
+        ts_event = (
+            Timestamp(int(event_time_ms) * 1_000_000)
+            if event_time_ms is not None
+            else self._clock.now_ns()
+        )
+        await self._bus.publish(
+            Topic.ACCOUNT,
+            AccountSnapshotEvent(
+                ts_event=ts_event,
+                ts_ingest=self._clock.now_ns(),
+                source="binance",
+                balances=balances,
+            ),
+        )
+
+    async def _handle_futures_account_update(self, msg: dict) -> None:
+        """Publish an AccountSnapshotEvent from an ACCOUNT_UPDATE frame.
+
+        Futures layout: ``a.B`` is the balances array; each entry has
+        ``a`` (asset), ``wb`` (wallet balance), ``cw`` (cross wallet).
+        Futures has no separate "free/locked" split — use ``wb`` as free
+        and 0 as locked so the dashboard shape stays consistent.
+        """
+        account = msg.get("a") or {}
+        raw_balances = account.get("B") or []
+        balances = tuple(
+            AccountBalance(
+                asset=str(b.get("a", "")),
+                free=Decimal(str(b.get("wb", "0"))),
+                locked=Decimal(0),
             )
             for b in raw_balances
         )

@@ -111,7 +111,7 @@ async def _amain() -> None:
             instruments=instruments,
             interval_seconds=10.0,
         ),
-        parameters={"target_quantity": "0.0001", "interval_seconds": 10.0},
+        parameters={"target_quantity": "0.002", "interval_seconds": 10.0},
     )
 
     streams = []
