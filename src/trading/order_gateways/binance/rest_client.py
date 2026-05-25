@@ -31,6 +31,7 @@ Three concerns this code is explicit about:
 
 from __future__ import annotations
 
+import asyncio
 import structlog
 import time
 from typing import Any, Mapping
@@ -42,11 +43,13 @@ except ImportError:  # pragma: no cover
     aiohttp = None  # type: ignore[assignment]
 
 from ...core.clock import Clock
-from ...core.exceptions import OrderGatewayError
+from ...core.exceptions import OrderError, OrderGatewayError
 from ..rate_limiter import RateLimiter
 from .config import BinanceConfig, BinanceCredentials
 from .errors import BinanceErrorResponse, translate_error
 from .signing import encode_query, sign
+
+_INVALID_TIMESTAMP_CODE = -1021
 
 _log = structlog.get_logger(__name__)
 
@@ -81,6 +84,11 @@ class BinanceRESTClient:
         # Positive if Binance is ahead of us; updated on connect.
         self._server_time_offset_ms: int = 0
         self._connected = False
+        self._resync_task: asyncio.Task[None] | None = None
+        # Serialises concurrent resyncs triggered by -1021 retries so a
+        # burst of in-flight signed requests doesn't cause N redundant
+        # /time calls.
+        self._resync_lock = asyncio.Lock()
 
     # --- Lifecycle --------------------------------------------------------
 
@@ -100,8 +108,19 @@ class BinanceRESTClient:
             self._session = None
             raise
         self._connected = True
+        if self._config.clock_resync_interval_seconds > 0:
+            self._resync_task = asyncio.create_task(
+                self._resync_loop(), name="binance-rest-clock-resync",
+            )
 
     async def close(self) -> None:
+        if self._resync_task is not None:
+            self._resync_task.cancel()
+            try:
+                await self._resync_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._resync_task = None
         if self._session is not None:
             await self._session.close()
             self._session = None
@@ -116,12 +135,15 @@ class BinanceRESTClient:
 
     # --- Time sync --------------------------------------------------------
 
-    async def _sync_server_time(self) -> None:
+    async def _sync_server_time(self, *, initial: bool = True) -> None:
         """Set ``_server_time_offset_ms`` based on Binance's serverTime.
 
-        Raises if our wall-clock disagrees by more than ``max_clock_drift_ms``;
-        that is almost always a sign of a misconfigured NTP and we should
-        fail loud rather than send signed requests that will all be rejected.
+        On the initial sync, raises if our wall-clock disagrees by more
+        than ``max_clock_drift_ms`` — that is almost always a misconfigured
+        NTP and we should fail loud. On periodic resync we log and
+        continue: drift is exactly the condition this method exists to
+        correct, and a long-running runner is more useful than one that
+        crashes the first time the host's clock wobbles.
         """
         before_ms = int(time.time() * 1000)
         data = await self._raw_get(self._config.api_prefix + "/time")
@@ -129,15 +151,36 @@ class BinanceRESTClient:
         local_mid = (before_ms + after_ms) // 2
         server_ms = int(data["serverTime"])
         offset = server_ms - local_mid
-        if abs(offset) > self._config.max_clock_drift_ms:
+        if initial and abs(offset) > self._config.max_clock_drift_ms:
             raise OrderGatewayError(
                 "Binance server time disagrees with local clock by "
                 f"{offset}ms (threshold {self._config.max_clock_drift_ms}ms). "
                 "Check NTP synchronization.",
                 offset_ms=offset,
             )
+        previous = self._server_time_offset_ms
         self._server_time_offset_ms = offset
-        _log.info("binance_clock_offset", offset_ms=offset)
+        if initial:
+            _log.info("binance_clock_offset", offset_ms=offset)
+        else:
+            _log.info(
+                "binance_clock_resynced",
+                offset_ms=offset,
+                previous_offset_ms=previous,
+                delta_ms=offset - previous,
+            )
+
+    async def _resync_loop(self) -> None:
+        interval = self._config.clock_resync_interval_seconds
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                async with self._resync_lock:
+                    await self._sync_server_time(initial=False)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log.warning("binance_clock_resync_failed", error=str(exc))
 
     def _now_ms_for_binance(self) -> int:
         """Wall-clock in ms, adjusted to match Binance server time."""
@@ -174,27 +217,39 @@ class BinanceRESTClient:
         # Reserve rate-limit tokens before sending. Blocks if needed.
         await self._rate_limiter.acquire(cost=weight)
 
-        # Build the request.
-        all_params: dict[str, Any] = dict(params or {})
-        headers: dict[str, str] = {}
-
-        if signed:
-            if self._creds is None:
-                raise OrderGatewayError("signed request requires credentials")
-            all_params["timestamp"] = self._now_ms_for_binance()
-            all_params["recvWindow"] = self._config.recv_window_ms
-            signature = sign(all_params, self._creds.api_secret)
-            all_params["signature"] = signature
-            headers["X-MBX-APIKEY"] = self._creds.api_key
-        elif user_data:
-            if self._creds is None:
-                raise OrderGatewayError("user_data request requires credentials")
-            headers["X-MBX-APIKEY"] = self._creds.api_key
-
         url = self._config.rest_base_url + path
-        query = encode_query(all_params) if all_params else ""
 
-        return await self._send(method, url, query=query, headers=headers)
+        def _build() -> tuple[str, dict[str, str]]:
+            all_params: dict[str, Any] = dict(params or {})
+            headers: dict[str, str] = {}
+            if signed:
+                if self._creds is None:
+                    raise OrderGatewayError("signed request requires credentials")
+                all_params["timestamp"] = self._now_ms_for_binance()
+                all_params["recvWindow"] = self._config.recv_window_ms
+                signature = sign(all_params, self._creds.api_secret)
+                all_params["signature"] = signature
+                headers["X-MBX-APIKEY"] = self._creds.api_key
+            elif user_data:
+                if self._creds is None:
+                    raise OrderGatewayError("user_data request requires credentials")
+                headers["X-MBX-APIKEY"] = self._creds.api_key
+            return (encode_query(all_params) if all_params else ""), headers
+
+        query, headers = _build()
+        try:
+            return await self._send(method, url, query=query, headers=headers)
+        except OrderError as exc:
+            # -1021: timestamp/recvWindow rejection. Resync (once, under a
+            # lock so concurrent retries share one /time call), rebuild the
+            # signed query with the new offset, and retry exactly once.
+            if not signed or exc.context.get("code") != _INVALID_TIMESTAMP_CODE:
+                raise
+            _log.warning("binance_invalid_timestamp_resyncing", error=str(exc))
+            async with self._resync_lock:
+                await self._sync_server_time(initial=False)
+            query, headers = _build()
+            return await self._send(method, url, query=query, headers=headers)
 
     async def _raw_get(self, path: str) -> Any:
         """Unsigned GET used internally (e.g. for time sync)."""

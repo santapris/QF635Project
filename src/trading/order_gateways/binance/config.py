@@ -46,6 +46,11 @@ class BinanceConfig:
     reconcile_interval_seconds: float = 60.0
     """How often the balance reconciler polls the account endpoint."""
 
+    clock_resync_interval_seconds: float = 30 * 60
+    """How often the REST client re-syncs its server-time offset. Guards
+    against clock drift during long-running sessions (e.g. WSL2 after a
+    host sleep/resume)."""
+
     @property
     def api_prefix(self) -> str:
         return "/fapi/v1" if self.futures else "/api/v3"

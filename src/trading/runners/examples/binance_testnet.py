@@ -106,7 +106,7 @@ async def _amain() -> int:
             fast_period=20,
             slow_period=50,
         ),
-        parameters={"target_quantity": "0.0001"},  # very small for testnet
+        parameters={"target_quantity": "0.001"},  # ~$100 notional at BTC ~$100k; testnet MIN_NOTIONAL is $50
     )
 
     # --- OrderGateway ------------------------------------------------------
