@@ -266,9 +266,26 @@ class BinanceRESTClient:
         headers: Mapping[str, str],
     ) -> Any:
         assert self._session is not None
-        full_url = f"{url}?{query}" if query else url
+        # Binance requires GET/DELETE params in the URL query string, but
+        # POST/PUT params in the request body as application/x-www-form-urlencoded.
+        # Sending POST params in the URL causes -1116 / -1100 because Binance
+        # reads the body for POST endpoints and sees an empty payload.
+        if method.upper() in ("POST", "PUT"):
+            full_url = url
+            body = query or None
+            req_headers = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+        else:
+            full_url = f"{url}?{query}" if query else url
+            body = None
+            req_headers = dict(headers)
+        _log.debug(
+            "binance_http_request",
+            method=method, url=full_url, body=body,
+        )
         try:
-            async with self._session.request(method, full_url, headers=headers) as resp:
+            async with self._session.request(
+                method, full_url, headers=req_headers, data=body
+            ) as resp:
                 # Some endpoints return non-JSON on auth failure (rare); guard.
                 try:
                     payload = await resp.json()

@@ -189,8 +189,9 @@ class BinanceOrderGateway(AbstractOrderGateway):
 
     def _build_order_params(self, req: OrderRequest) -> dict[str, Any]:
         wire_symbol = self._symbols.wire_symbol(req.instrument)
+        futures = self._config.futures
         binance_type, effective_tif = order_type_to_binance(
-            req.order_type, req.time_in_force,
+            req.order_type, req.time_in_force, futures=futures,
         )
         params: dict[str, Any] = {
             "symbol": wire_symbol,
@@ -200,8 +201,10 @@ class BinanceOrderGateway(AbstractOrderGateway):
             "newClientOrderId": req.client_order_id,
             "newOrderRespType": "ACK",  # fills come via user-data WS
         }
-        # MARKET orders cannot have TIF set; everything else can.
-        if req.order_type is not OrderType.MARKET:
+        # Spot LIMIT_MAKER and MARKET must not have timeInForce set.
+        # On Futures, POST_ONLY maps to LIMIT+GTX so TIF is always included.
+        omit_tif = binance_type in ("MARKET", "LIMIT_MAKER")
+        if not omit_tif:
             params["timeInForce"] = tif_to_binance(effective_tif)
         if req.price is not None and binance_type != "MARKET":
             params["price"] = self._format_decimal(req.price)

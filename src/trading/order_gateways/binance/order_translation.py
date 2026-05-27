@@ -8,7 +8,9 @@ Binance Spot order types: ``LIMIT``, ``MARKET``, ``STOP_LOSS``,
 ``STOP_LOSS_LIMIT``, ``TAKE_PROFIT``, ``TAKE_PROFIT_LIMIT``, ``LIMIT_MAKER``.
 
 Notable mappings:
-- ``POST_ONLY`` -> ``LIMIT_MAKER`` (Binance's name for post-only LIMIT)
+- Spot  ``POST_ONLY`` -> ``LIMIT_MAKER`` (TIF must be omitted)
+- Futures ``POST_ONLY`` -> ``LIMIT`` + ``timeInForce=GTX`` (LIMIT_MAKER does
+  not exist on Futures; GTX is the Good-Till-Crossing / post-only TIF)
 - ``IOC`` / ``FOK`` aren't standalone types on Binance — they're TIF flags
   on a LIMIT order. We translate by emitting ``LIMIT`` with the right TIF.
 """
@@ -39,13 +41,16 @@ def side_from_binance(s: str) -> Side:
 
 
 def order_type_to_binance(
-    order_type: OrderType, time_in_force: TimeInForce
+    order_type: OrderType, time_in_force: TimeInForce, *, futures: bool = False
 ) -> tuple[str, TimeInForce]:
     """Translate ``(order_type, tif)`` to Binance's ``(type, timeInForce)``.
 
-    Returns the pair to embed in the request. For MARKET orders, TIF is
-    omitted (Binance rejects MARKET with TIF set); we return ``GTC`` as
-    a sentinel that the caller should skip including.
+    Returns the pair to embed in the request. The caller is responsible for
+    omitting timeInForce when the returned type is ``MARKET`` or
+    ``LIMIT_MAKER`` (both reject if the field is present on Spot).
+
+    ``futures=True`` selects Futures-specific mappings where they differ
+    from Spot (notably POST_ONLY -> LIMIT+GTX instead of LIMIT_MAKER).
     """
     if order_type is OrderType.MARKET:
         return "MARKET", time_in_force  # caller omits TIF for MARKET
@@ -57,7 +62,10 @@ def order_type_to_binance(
     if order_type is OrderType.FOK:
         return "LIMIT", TimeInForce.FOK
     if order_type is OrderType.POST_ONLY:
-        # LIMIT_MAKER is post-only; TIF is implicit (rejected if would cross).
+        if futures:
+            # Futures has no LIMIT_MAKER; post-only is LIMIT + GTX (Good-Till-Crossing).
+            return "LIMIT", TimeInForce.GTX
+        # Spot: LIMIT_MAKER is post-only; TIF must be omitted by the caller.
         return "LIMIT_MAKER", time_in_force
     if order_type is OrderType.STOP:
         return "STOP_LOSS", time_in_force
@@ -73,6 +81,8 @@ def tif_to_binance(tif: TimeInForce) -> str:
         return "IOC"
     if tif is TimeInForce.FOK:
         return "FOK"
+    if tif is TimeInForce.GTX:
+        return "GTX"
     raise OrderError(f"unsupported time-in-force for Binance: {tif}")
 
 

@@ -11,16 +11,24 @@ End-to-end wiring:
 - :class:`ListenKeyManager` + :class:`BinanceUserDataStream` for the
   fill feedback loop.
 - :class:`BalanceReconciler` for the safety net.
-- A simple momentum strategy on BTC-USDT for demonstration.
+- A market-making strategy on BTC-USDT: quotes both sides around the
+  mid with inventory skew to keep the book balanced.
 
 To run:
     python -m trading.runners.examples.binance_testnet
 
-This is a long-running process — Ctrl-C to stop. The first run should
-fire signals when EMA fast/slow cross; you'll see ack/fill events in
-the logs. Watch closely for the first few orders. If anything looks
-off (signature errors, weird symbols, unfamiliar message types) stop
-immediately and investigate before adding more capital.
+This is a long-running process — Ctrl-C to stop. The strategy emits
+POST_ONLY GTC quotes on every tick; you'll see ack/fill events in the
+logs as the spread is crossed. Watch closely for the first few orders.
+If anything looks off (signature errors, weird symbols, unfamiliar
+message types) stop immediately and investigate before adding more
+capital.
+
+Strategy parameters (adjust before going live):
+- quote_size:          0.01 BTC   (~$1000 notional at BTC ~$100k)
+- target_spread_bps:   5 bps      (0.05% tight spread to attract more fills)
+- max_position:        0.05 BTC   (5× quote size; then that side withdraws)
+- inventory_skew_bps:  15 bps     (aggressive skew to burn down inventory fast)
 """
 
 from __future__ import annotations
@@ -52,9 +60,10 @@ from trading.risk.rules import (
     InstrumentAllowlistRule,
     MaxOrderSizeRule,
     MaxPositionRule,
+    ThrottleRule,
 )
 from trading.strategy import StrategyRegistry
-from trading.strategy.examples import MomentumStrategy
+from trading.strategy.examples import MarketMakingStrategy
 from trading.config import load_settings
 from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
 from trading.runners.examples._runner_config import load_runner_config
@@ -89,10 +98,13 @@ async def _amain() -> int:
     risk.register_global_rules([
         InstrumentAllowlistRule(allowed_instrument_ids=["BINANCE:BTC-USDT"]),
     ])
-    risk.register_rules(StrategyId("momentum"), [
-        MaxPositionRule(max_long=Decimal("0.001"), max_short=Decimal("0.001")),
-        MaxOrderSizeRule(max_quantity=Decimal("0.001")),
-        DailyLossLimitRule(max_loss=Decimal("50")),
+    risk.register_rules(StrategyId("market-maker"), [
+        # max_position must be >= MarketMakingStrategy.max_position so the
+        # risk engine never blocks quotes that are within the strategy's own cap.
+        MaxPositionRule(max_long=Decimal("0.05"), max_short=Decimal("0.05")),
+        MaxOrderSizeRule(max_quantity=Decimal("0.01")),     # one quote_size at a time
+        DailyLossLimitRule(max_loss=Decimal("200")),
+        ThrottleRule(max_signals=10, window_seconds=1.0),  # cap at 10 signals/s (5 ticks × 2 sides)
     ])
     oms = OMSEngine(bus=bus, clock=clock)
 
@@ -100,13 +112,16 @@ async def _amain() -> int:
     portfolio = EnginePortfolioView(position)
     strategies = StrategyRegistry(bus=bus, clock=clock, portfolio=portfolio)
     strategies.register(
-        MomentumStrategy(
-            strategy_id=StrategyId("momentum"),
+        MarketMakingStrategy(
+            strategy_id=StrategyId("market-maker"),
             instruments=instruments,
-            fast_period=20,
-            slow_period=50,
+            quote_size=Decimal("0.01"),         # ~$1000 notional at BTC ~$100k
+            target_spread_bps=5.0,              # tight 0.05% spread to attract more fills
+            max_position=Decimal("0.05"),       # hold up to 5× quote_size before withdrawing a side
+            inventory_skew_bps=15.0,            # aggressive skew to burn down inventory fast
+            min_quote_interval_s=1.0,           # at most one requote per second
+            requote_threshold_bps=2.0,          # skip if mid moved < 0.02% since last quote
         ),
-        parameters={"target_quantity": "0.001"},  # ~$100 notional at BTC ~$100k; testnet MIN_NOTIONAL is $50
     )
 
     # --- OrderGateway ------------------------------------------------------

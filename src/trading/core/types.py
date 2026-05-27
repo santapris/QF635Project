@@ -99,6 +99,7 @@ class TimeInForce(str, Enum):
     FOK = "FOK"
     DAY = "DAY"
     GTD = "GTD"  # Good-Till-Date
+    GTX = "GTX"  # Good-Till-Crossing (Futures post-only)
 
 
 class OrderStatus(str, Enum):
