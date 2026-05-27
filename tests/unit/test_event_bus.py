@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from trading.core import Side, SignalEvent, StrategyId
+from trading.core import OrderLeg, Side, SignalEvent, StrategyId
 from trading.core.exceptions import BackpressureError, EventBusError
 from trading.event_bus import AsyncioBus, MemoryBus, Topic
 
@@ -18,8 +18,7 @@ def _signal(clock, btc, strategy_id, qty="1") -> SignalEvent:
         source="test",
         strategy_id=strategy_id,
         instrument=btc,
-        side=Side.BUY,
-        target_quantity=Decimal(qty),
+        legs=(OrderLeg(side=Side.BUY, quantity=Decimal(qty)),),
     )
 
 
@@ -136,7 +135,7 @@ async def test_asyncio_bus_ordered_delivery(clock, btc, strategy_id) -> None:
     bus = AsyncioBus(queue_size=100)
     prices: list[Decimal] = []
 
-    async def handler(evt): prices.append(evt.target_quantity)
+    async def handler(evt): prices.append(evt.legs[0].quantity)
 
     await bus.subscribe(Topic.SIGNALS, handler)
     await bus.start()

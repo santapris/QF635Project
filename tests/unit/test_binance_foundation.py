@@ -282,13 +282,18 @@ async def test_rest_client_signs_and_sends():
         assert result == {"symbol": "BTCUSDT", "orderId": 123}
 
         # Verify the call included the API key header and the signed params.
+        # POSTs send their params (including signature) in the body as
+        # application/x-www-form-urlencoded — not in the URL query string.
         last_call = session.request.call_args
         assert "X-MBX-APIKEY" in last_call.kwargs["headers"]
         assert last_call.kwargs["headers"]["X-MBX-APIKEY"] == "k"
+        assert last_call.kwargs["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
         url = last_call.args[1]
-        assert "signature=" in url
-        assert "timestamp=" in url
-        assert "recvWindow=5000" in url
+        assert url == "https://testnet.binance.vision/api/v3/order"
+        body = last_call.kwargs["data"]
+        assert "signature=" in body
+        assert "timestamp=" in body
+        assert "recvWindow=5000" in body
         await client.close()
 
 

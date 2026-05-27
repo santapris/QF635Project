@@ -8,6 +8,7 @@ from decimal import Decimal
 import pytest
 
 from trading.core import (
+    OrderLeg,
     OrderType,
     Side,
     SignalEvent,
@@ -66,9 +67,13 @@ async def test_full_pipeline_executes_signal(clock, btc, strategy_id) -> None:
 
         sig = SignalEvent(
             ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="strat",
-            strategy_id=strategy_id, instrument=btc, side=Side.BUY,
-            target_quantity=Decimal("0.5"),
-            order_type=OrderType.MARKET, time_in_force=TimeInForce.IOC,
+            strategy_id=strategy_id, instrument=btc,
+            legs=(OrderLeg(
+                side=Side.BUY,
+                quantity=Decimal("0.5"),
+                order_type=OrderType.MARKET,
+                time_in_force=TimeInForce.IOC,
+            ),),
         )
         await bus.publish(Topic.SIGNALS, sig)
         await asyncio.sleep(0.3)
@@ -118,9 +123,13 @@ async def test_risk_clamps_oversize_signal(clock, btc, strategy_id) -> None:
         # Strategy wants 1.0 BTC; cap is 0.3 -> clamp expected.
         sig = SignalEvent(
             ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="strat",
-            strategy_id=strategy_id, instrument=btc, side=Side.BUY,
-            target_quantity=Decimal("1.0"),
-            order_type=OrderType.MARKET, time_in_force=TimeInForce.IOC,
+            strategy_id=strategy_id, instrument=btc,
+            legs=(OrderLeg(
+                side=Side.BUY,
+                quantity=Decimal("1.0"),
+                order_type=OrderType.MARKET,
+                time_in_force=TimeInForce.IOC,
+            ),),
         )
         await bus.publish(Topic.SIGNALS, sig)
         await asyncio.sleep(0.3)

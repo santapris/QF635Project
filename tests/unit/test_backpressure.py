@@ -21,6 +21,7 @@ from trading.core import (
     FillEvent,
     Instrument,
     LiveClock,
+    OrderLeg,
     OrderType,
     Side,
     SignalEvent,
@@ -86,9 +87,13 @@ def btc_inst() -> Instrument:
 def _signal(clock, inst, strategy_id, qty="1") -> SignalEvent:
     return SignalEvent(
         ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="test",
-        strategy_id=strategy_id, instrument=inst, side=Side.BUY,
-        target_quantity=Decimal(qty),
-        order_type=OrderType.MARKET, time_in_force=TimeInForce.IOC,
+        strategy_id=strategy_id, instrument=inst,
+        legs=(OrderLeg(
+            side=Side.BUY,
+            quantity=Decimal(qty),
+            order_type=OrderType.MARKET,
+            time_in_force=TimeInForce.IOC,
+        ),),
     )
 
 
@@ -166,36 +171,17 @@ def _make_order(inst: Instrument, strategy_id: StrategyId) -> Order:
     )
 
 
-async def test_oms_submit_child_backpressure_rejects_order(
+async def test_oms_place_quote_backpressure_rejects_order(
     full_bus, clock, btc_inst, strategy_id, caplog
 ) -> None:
     """When the OrderRequest publish fails, the order is transitioned to
-    REJECTED and the algo is cleaned up — no stuck PENDING_NEW orders."""
-    from trading.oms.execution_algos.immediate import ImmediateAlgo
-    from trading.oms.execution_algos.base import ChildOrderSpec
-
+    REJECTED — no stuck PENDING_NEW orders."""
     oms = OMSEngine(bus=full_bus, clock=clock)
     sig = _signal(clock, btc_inst, strategy_id)
-
-    # Manually register a parent so _submit_child has context.
-    parent_id = OrderId(uuid4())
-    algo = ImmediateAlgo(
-        quantity=Quantity(Decimal("1")),
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.IOC,
-    )
-    oms._algos[parent_id] = algo
-    oms._parents[parent_id] = sig
-
-    spec = ChildOrderSpec(
-        order_type=OrderType.MARKET,
-        quantity=Quantity(Decimal("1")),
-        price=None,
-        time_in_force=TimeInForce.IOC,
-    )
+    leg = sig.legs[0]
 
     with caplog.at_level(logging.CRITICAL, logger="trading.oms.engine"):
-        await oms._submit_child(parent_id, spec)
+        await oms._place_quote(sig, leg)
 
     assert oms._dropped_events >= 1
     assert "backpressure" in caplog.text.lower()
@@ -205,10 +191,6 @@ async def test_oms_submit_child_backpressure_rejects_order(
     (order,) = oms._orders.values()
     assert order.status == OrderStatus.REJECTED
     assert order.reject_reason is not None
-
-    # Algo and parent must be cleaned up.
-    assert parent_id not in oms._algos
-    assert parent_id not in oms._parents
 
 
 async def test_oms_cancel_order_backpressure_logged(

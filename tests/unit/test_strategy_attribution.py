@@ -22,6 +22,7 @@ import pytest
 from trading.core import (
     AssetType,
     Instrument,
+    OrderLeg,
     OrderType,
     Side,
     SignalEvent,
@@ -34,8 +35,6 @@ from trading.core.types import (
     Quantity,
 )
 from trading.oms import OMSEngine
-from trading.oms.execution_algos.base import ChildOrderSpec
-from trading.oms.execution_algos.immediate import ImmediateAlgo
 
 
 # ---------------------------------------------------------------------------
@@ -67,30 +66,20 @@ class _NullBus:
 async def test_strategy_id_for_client_order_found(
     clock, btc_inst, strategy_id
 ) -> None:
-    """After _submit_child completes, the coid -> strategy_id lookup works."""
+    """After _place_quote completes, the coid -> strategy_id lookup works."""
     oms = OMSEngine(bus=_NullBus(), clock=clock)
+    leg = OrderLeg(
+        side=Side.BUY,
+        quantity=Quantity(Decimal("1")),
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.IOC,
+    )
     sig = SignalEvent(
         ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="test",
-        strategy_id=strategy_id, instrument=btc_inst, side=Side.BUY,
-        target_quantity=Decimal("1"),
-        order_type=OrderType.MARKET, time_in_force=TimeInForce.IOC,
+        strategy_id=strategy_id, instrument=btc_inst,
+        legs=(leg,),
     )
-    parent_id = OrderId(uuid4())
-    algo = ImmediateAlgo(
-        quantity=Quantity(Decimal("1")),
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.IOC,
-    )
-    oms._algos[parent_id] = algo
-    oms._parents[parent_id] = sig
-
-    spec = ChildOrderSpec(
-        order_type=OrderType.MARKET,
-        quantity=Quantity(Decimal("1")),
-        price=None,
-        time_in_force=TimeInForce.IOC,
-    )
-    await oms._submit_child(parent_id, spec)
+    await oms._place_quote(sig, leg)
 
     assert len(oms._orders) == 1
     (order,) = oms._orders.values()
@@ -119,28 +108,18 @@ async def test_strategy_id_lookup_uses_coid_not_order_id(
 ) -> None:
     """The reverse map stores ClientOrderId; passing a raw OrderId str returns None."""
     oms = OMSEngine(bus=_NullBus(), clock=clock)
+    leg = OrderLeg(
+        side=Side.BUY,
+        quantity=Quantity(Decimal("1")),
+        order_type=OrderType.MARKET,
+        time_in_force=TimeInForce.IOC,
+    )
     sig = SignalEvent(
         ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="test",
-        strategy_id=strategy_id, instrument=btc_inst, side=Side.BUY,
-        target_quantity=Decimal("1"),
-        order_type=OrderType.MARKET, time_in_force=TimeInForce.IOC,
+        strategy_id=strategy_id, instrument=btc_inst,
+        legs=(leg,),
     )
-    parent_id = OrderId(uuid4())
-    algo = ImmediateAlgo(
-        quantity=Quantity(Decimal("1")),
-        order_type=OrderType.MARKET,
-        time_in_force=TimeInForce.IOC,
-    )
-    oms._algos[parent_id] = algo
-    oms._parents[parent_id] = sig
-
-    spec = ChildOrderSpec(
-        order_type=OrderType.MARKET,
-        quantity=Quantity(Decimal("1")),
-        price=None,
-        time_in_force=TimeInForce.IOC,
-    )
-    await oms._submit_child(parent_id, spec)
+    await oms._place_quote(sig, leg)
 
     (order,) = oms._orders.values()
     # Using the order_id (not coid) should return None.

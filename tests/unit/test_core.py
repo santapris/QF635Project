@@ -12,6 +12,7 @@ from trading.core import (
     EventId,
     OrderBookEvent,
     OrderBookLevel,
+    OrderLeg,
     OrderStatus,
     RiskDecision,
     Side,
@@ -82,12 +83,11 @@ def test_event_is_frozen(clock, btc, strategy_id) -> None:
         source="test",
         strategy_id=strategy_id,
         instrument=btc,
-        side=Side.BUY,
-        target_quantity=Decimal("1"),
+        legs=(OrderLeg(side=Side.BUY, quantity=Decimal("1")),),
     )
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
-        sig.target_quantity = Decimal("2")
+        sig.legs = ()
 
 
 def test_event_decimal_round_trip(clock, btc, strategy_id) -> None:
@@ -97,13 +97,12 @@ def test_event_decimal_round_trip(clock, btc, strategy_id) -> None:
         source="test",
         strategy_id=strategy_id,
         instrument=btc,
-        side=Side.BUY,
-        target_quantity=Decimal("0.5"),
+        legs=(OrderLeg(side=Side.BUY, quantity=Decimal("0.5")),),
     )
     js = sig.model_dump_json()
     sig2 = SignalEvent.model_validate_json(js)
-    assert sig2.target_quantity == Decimal("0.5")
-    assert isinstance(sig2.target_quantity, Decimal)
+    assert sig2.legs[0].quantity == Decimal("0.5")
+    assert isinstance(sig2.legs[0].quantity, Decimal)
 
 
 def test_tick_event_mid_and_spread(clock, btc) -> None:
@@ -181,12 +180,12 @@ def test_signal_event_defaults(clock, btc, strategy_id) -> None:
         source="test",
         strategy_id=strategy_id,
         instrument=btc,
-        side=Side.BUY,
-        target_quantity=Decimal("0.1"),
+        legs=(OrderLeg(side=Side.BUY, quantity=Decimal("0.1")),),
     )
     assert sig.rationale == ""
     assert sig.metadata == {}
-    assert sig.suggested_price is None
+    assert sig.atomic is False
+    assert sig.legs[0].price is None
 
 
 def test_risk_decision_fields(clock, btc, strategy_id) -> None:
