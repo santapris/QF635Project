@@ -8,6 +8,7 @@ import Chip from "@mui/material/Chip";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { LogRow } from "../store/pipelineStore";
+import { formatTs } from "../utils/formatTs";
 
 const LEVELS = ["all", "debug", "info", "warning", "error", "critical"];
 
@@ -20,7 +21,7 @@ const LEVEL_COLOR: Record<string, "default" | "info" | "success" | "warning" | "
 };
 
 const columns: GridColDef<LogRow>[] = [
-  { field: "ts", headerName: "Time", width: 180 },
+  { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
   {
     field: "level",
     headerName: "Level",

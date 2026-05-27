@@ -4,6 +4,7 @@ import Chip from "@mui/material/Chip";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { OrderRow } from "../store/pipelineStore";
+import { formatTs } from "../utils/formatTs";
 
 const STATUS_COLOR: Record<string, "default" | "info" | "success" | "error" | "warning"> = {
   new: "info",
@@ -14,7 +15,7 @@ const STATUS_COLOR: Record<string, "default" | "info" | "success" | "error" | "w
 };
 
 const columns: GridColDef<OrderRow>[] = [
-  { field: "ts", headerName: "Time", width: 180 },
+  { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
   { field: "order_id", headerName: "Order ID", width: 130 },
   { field: "strategy_id", headerName: "Strategy", width: 110 },
   { field: "instrument", headerName: "Instrument", width: 120 },

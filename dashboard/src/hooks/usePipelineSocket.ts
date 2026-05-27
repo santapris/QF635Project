@@ -8,6 +8,30 @@ import { PipelineAction } from "../store/pipelineStore";
 const WS_URL = "ws://localhost:8765/ws";
 const MAX_BACKOFF_MS = 30_000;
 
+/**
+ * Normalise any timestamp the backend may send to milliseconds since epoch.
+ *
+ * The dashboard_server.py envelope uses ``_now_iso()`` which emits an
+ * ISO-8601 string (e.g. "2026-05-23T12:34:56.789+00:00").  Some internal
+ * event fields carry nanosecond integers as strings.  Both forms are accepted
+ * here so every consumer in the store gets a consistent numeric ms value.
+ */
+function toMs(raw: string | number | undefined): number {
+  if (raw == null) return Date.now();
+  const n = Number(raw);
+  if (!isNaN(n)) {
+    // Heuristic: nanoseconds > year-2000 in ms (9.46e11), so values above
+    // 1e15 are treated as nanoseconds, between 1e12..1e15 as microseconds,
+    // otherwise as milliseconds.
+    if (n > 1e15) return Math.floor(n / 1_000_000);
+    if (n > 1e12) return Math.floor(n / 1_000);
+    return n;
+  }
+  // ISO string
+  const d = Date.parse(String(raw));
+  return isNaN(d) ? Date.now() : d;
+}
+
 function parseMessage(raw: string): PipelineAction | null {
   let msg: { topic: string; event_type: string; timestamp: string; data: Record<string, unknown> };
   try {
@@ -16,7 +40,8 @@ function parseMessage(raw: string): PipelineAction | null {
     return null;
   }
 
-  const { topic, event_type, timestamp: ts, data } = msg;
+  const { topic, event_type, timestamp: rawTs, data } = msg;
+  const ts = toMs(rawTs);                         // normalised ms epoch
   const id = `${ts}-${Math.random()}`;
 
   switch (topic) {
@@ -25,6 +50,7 @@ function parseMessage(raw: string): PipelineAction | null {
         return {
           type: "TICK",
           payload: {
+            id,
             instrument: String((data.instrument as Record<string,unknown>)?.symbol ?? data.instrument_id ?? ""),
             bid_price: String(data.bid_price ?? ""),
             ask_price: String(data.ask_price ?? ""),
@@ -38,6 +64,7 @@ function parseMessage(raw: string): PipelineAction | null {
         return {
           type: "TRADE",
           payload: {
+            id,
             instrument: String((data.instrument as Record<string,unknown>)?.symbol ?? ""),
             price: String(data.price ?? ""),
             quantity: String(data.quantity ?? ""),
@@ -77,11 +104,22 @@ function parseMessage(raw: string): PipelineAction | null {
         },
       };
 
-    case "orders":
+    case "orders": {
+      // Map all order lifecycle event_types to a human-readable status label.
+      const STATUS_MAP: Record<string, string> = {
+        order_request:      "pending",
+        order_acknowledged: "open",
+        order_rejected:     "rejected",
+        order_cancelled:    "cancelled",
+        order_filled:       "filled",
+        order_partially_filled: "partial",
+      };
       return {
         type: "ORDER",
         payload: {
-          id: `${String(data.order_id ?? "")}-${event_type}`,
+          // One row per order_id — later events (ack, reject, cancel) update
+          // the status on the same row via capDedup in the reducer.
+          id: String(data.order_id ?? id),
           ts,
           event_type,
           order_id: String(data.order_id ?? ""),
@@ -91,9 +129,10 @@ function parseMessage(raw: string): PipelineAction | null {
           order_type: String(data.order_type ?? ""),
           quantity: String(data.quantity ?? ""),
           price: data.price ? String(data.price) : null,
-          status: event_type,
+          status: STATUS_MAP[event_type] ?? event_type,
         },
       };
+    }
 
     case "fills":
       return {
@@ -170,6 +209,7 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(1000);
   const unmountedRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connect = useCallback(() => {
     if (unmountedRef.current) return;
@@ -193,7 +233,7 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
       dispatch({ type: "SET_STATUS", payload: "reconnecting" });
       const delay = Math.min(backoffRef.current, MAX_BACKOFF_MS);
       backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF_MS);
-      setTimeout(connect, delay);
+      retryTimerRef.current = setTimeout(connect, delay);
     };
 
     ws.onerror = () => {
@@ -206,6 +246,11 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
     connect();
     return () => {
       unmountedRef.current = true;
+      // Cancel any pending reconnect timer so it doesn't fire after unmount.
+      if (retryTimerRef.current !== null) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
       const ws = wsRef.current;
       wsRef.current = null;
       if (ws) {

@@ -4,9 +4,10 @@ import Chip from "@mui/material/Chip";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { SignalRow } from "../store/pipelineStore";
+import { formatTs } from "../utils/formatTs";
 
 const columns: GridColDef<SignalRow>[] = [
-  { field: "ts", headerName: "Time", width: 180 },
+  { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
   { field: "strategy_id", headerName: "Strategy", width: 120 },
   { field: "instrument", headerName: "Instrument", width: 120 },
   {

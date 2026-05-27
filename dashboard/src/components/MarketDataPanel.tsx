@@ -14,14 +14,10 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { TickData, TradeData } from "../store/pipelineStore";
+import { formatTs } from "../utils/formatTs";
 
-interface TickRow extends TickData {
-  id: string;
-}
-
-interface TradeRowWithId extends TradeData {
-  id: string;
-}
+type TickRow = TickData;
+type TradeRowWithId = TradeData;
 
 type TapeMode = "ticks" | "trades";
 
@@ -36,7 +32,7 @@ const tickColumns: GridColDef<TickRow>[] = [
 ];
 
 const tickTapeColumns: GridColDef<TickRow>[] = [
-  { field: "ts", headerName: "Time", width: 180 },
+  { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
   { field: "instrument", headerName: "Instrument", width: 110 },
   { field: "bid_price", headerName: "Bid", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
   { field: "ask_price", headerName: "Ask", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
@@ -45,7 +41,7 @@ const tickTapeColumns: GridColDef<TickRow>[] = [
 ];
 
 const tradeColumns: GridColDef<TradeRowWithId>[] = [
-  { field: "ts", headerName: "Time", width: 180 },
+  { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
   { field: "instrument", headerName: "Instrument", flex: 1, minWidth: 110 },
   { field: "price", headerName: "Price", flex: 1, minWidth: 100, align: "right", headerAlign: "right" },
   { field: "quantity", headerName: "Qty", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
@@ -92,30 +88,28 @@ export default function MarketDataPanel({ ticks, tickHistory, recentTrades }: Pr
     }
   };
 
-  const tickRows: TickRow[] = Object.values(ticks).map((t) => ({ ...t, id: t.instrument }));
+  // ticks is keyed by instrument (latest snapshot per instrument), so ids are already unique.
+  const tickRows: TickRow[] = Object.values(ticks);
   const hasTicks = tickRows.length > 0;
 
+  // Derive instrument list only from the latest-tick map (O(k) where k = # instruments),
+  // not by scanning the full rolling histories on every message.
   const instrumentOptions = useMemo(() => {
-    const fromLatest = Object.keys(ticks);
-    const fromHistory = tickHistory.map((t) => t.instrument);
-    const fromTrades = recentTrades.map((t) => t.instrument);
-    return Array.from(new Set([...fromLatest, ...fromHistory, ...fromTrades])).sort();
-  }, [ticks, tickHistory, recentTrades]);
+    return Object.keys(ticks).sort();
+  }, [ticks]);
 
   const tapeTickRows: TickRow[] = useMemo(() => {
     const src = frozenTicks ?? tickHistory;
-    const filtered = instrument === ALL_INSTRUMENTS
+    return instrument === ALL_INSTRUMENTS
       ? src
       : src.filter((t) => t.instrument === instrument);
-    return filtered.map((t, i) => ({ ...t, id: `${t.ts}-${t.instrument}-${i}` }));
   }, [frozenTicks, tickHistory, instrument]);
 
   const tapeTradeRows: TradeRowWithId[] = useMemo(() => {
     const src = frozenTrades ?? recentTrades;
-    const filtered = instrument === ALL_INSTRUMENTS
+    return instrument === ALL_INSTRUMENTS
       ? src
       : src.filter((t) => t.instrument === instrument);
-    return filtered.map((t, i) => ({ ...t, id: `${t.ts}-${t.instrument}-${i}` }));
   }, [frozenTrades, recentTrades, instrument]);
 
   return (
@@ -140,6 +134,7 @@ export default function MarketDataPanel({ ticks, tickHistory, recentTrades }: Pr
             <DataGrid
               rows={tickRows}
               columns={tickColumns}
+              getRowId={(row) => row.instrument}
               density="compact"
               disableRowSelectionOnClick
               hideFooter

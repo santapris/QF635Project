@@ -11,15 +11,10 @@ import {
   ReferenceLine,
 } from "recharts";
 import type { PnlPoint } from "../store/pipelineStore";
+import { formatTs } from "../utils/formatTs";
 
 interface Props {
   pnlHistory: PnlPoint[];
-}
-
-function formatTs(ts: string): string {
-  // ts is a nanosecond integer as string; convert to HH:MM:SS
-  const ms = Math.floor(Number(ts) / 1_000_000);
-  return new Date(ms).toLocaleTimeString();
 }
 
 export default function PnlChart({ pnlHistory }: Props) {
@@ -35,10 +30,10 @@ export default function PnlChart({ pnlHistory }: Props) {
       ) : (
         <ResponsiveContainer width="100%" height="90%">
           <LineChart data={pnlHistory} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
-            <XAxis dataKey="ts" tickFormatter={formatTs} tick={{ fontSize: 11 }} minTickGap={60} />
+            <XAxis dataKey="ts" tickFormatter={(v: number) => formatTs(v)} tick={{ fontSize: 11 }} minTickGap={60} />
             <YAxis tick={{ fontSize: 11 }} width={70} />
             <Tooltip
-              labelFormatter={(v) => formatTs(String(v))}
+              labelFormatter={(v) => formatTs(Number(v))}
               formatter={(v: number) => v.toFixed(4)}
             />
             <Legend />

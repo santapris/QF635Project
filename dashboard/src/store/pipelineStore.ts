@@ -6,25 +6,27 @@
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 export interface TickData {
+  id: string;
   instrument: string;
   bid_price: string;
   ask_price: string;
   bid_size: string;
   ask_size: string;
-  ts: string;
+  ts: number;  // ms since epoch
 }
 
 export interface TradeData {
+  id: string;
   instrument: string;
   price: string;
   quantity: string;
   aggressor_side: string | null;
-  ts: string;
+  ts: number;  // ms since epoch
 }
 
 export interface SignalRow {
   id: string;
-  ts: string;
+  ts: number;  // ms since epoch
   strategy_id: string;
   instrument: string;
   side: string;
@@ -35,7 +37,7 @@ export interface SignalRow {
 
 export interface RiskRow {
   id: string;
-  ts: string;
+  ts: number;  // ms since epoch
   strategy_id: string;
   approved: boolean;
   rule_name: string | null;
@@ -45,7 +47,7 @@ export interface RiskRow {
 
 export interface OrderRow {
   id: string;
-  ts: string;
+  ts: number;  // ms since epoch
   event_type: string;
   order_id: string;
   strategy_id: string;
@@ -59,7 +61,7 @@ export interface OrderRow {
 
 export interface FillRow {
   id: string;
-  ts: string;
+  ts: number;  // ms since epoch
   order_id: string;
   strategy_id: string;
   instrument: string;
@@ -79,11 +81,11 @@ export interface PositionRow {
   unrealized_pnl: string;
   realized_pnl: string;
   mark_price: string;
-  ts: string;
+  ts: number;  // ms since epoch
 }
 
 export interface PnlPoint {
-  ts: string;
+  ts: number;  // ms since epoch
   unrealized_pnl: number;
   realized_pnl: number;
 }
@@ -95,13 +97,13 @@ export interface AccountBalance {
 }
 
 export interface AccountSnapshot {
-  ts: string;
+  ts: number;  // ms since epoch
   balances: AccountBalance[];
 }
 
 export interface LogRow {
   id: string;
-  ts: string;
+  ts: number;  // ms since epoch
   level: string;
   logger: string;
   message: string;
@@ -118,9 +120,10 @@ export interface PipelineState {
   orders: OrderRow[];                       // rolling 100
   fills: FillRow[];                         // rolling 100
   positions: Record<string, PositionRow>;   // instrument -> latest position
-  pnlHistory: PnlPoint[];                   // time-series for chart
+  pnlHistory: PnlPoint[];                   // time-series for chart, rolling 500
   account: AccountSnapshot | null;          // latest exchange account snapshot
   logs: LogRow[];                           // rolling 500
+  _lastPnlSampleMs: number;                 // wall-clock ms of last pnlHistory sample
 }
 
 export const initialState: PipelineState = {
@@ -136,6 +139,7 @@ export const initialState: PipelineState = {
   pnlHistory: [],
   account: null,
   logs: [],
+  _lastPnlSampleMs: 0,
 };
 
 export type PipelineAction =
@@ -150,6 +154,11 @@ export type PipelineAction =
   | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
   | { type: "CLEAR_LOGS" };
+
+/** Minimum wall-clock interval between PnL chart samples (1 second). */
+const PNL_SAMPLE_INTERVAL_MS = 1_000;
+/** Maximum PnL history points retained in memory. */
+const PNL_HISTORY_LIMIT = 500;
 
 function cap<T>(arr: T[], item: T, limit: number): T[] {
   const next = [item, ...arr];
@@ -186,34 +195,61 @@ export function pipelineReducer(
     case "RISK":
       return { ...state, riskDecisions: cap(state.riskDecisions, action.payload, 100) };
 
-    case "ORDER":
-      return { ...state, orders: capDedup(state.orders, action.payload, 100) };
+    case "ORDER": {
+      // Merge with existing row so later events (ack, reject, cancel) update
+      // only the status/ts while preserving instrument/side/quantity from the
+      // original order_request (which carries the full order details).
+      const incoming = action.payload;
+      const existing = state.orders.find((o) => o.id === incoming.id);
+      const merged: OrderRow = existing
+        ? {
+            ...existing,
+            ts: incoming.ts,
+            event_type: incoming.event_type,
+            status: incoming.status,
+          }
+        : incoming;
+      return { ...state, orders: capDedup(state.orders, merged, 100) };
+    }
 
     case "FILL": {
-      const fill = action.payload;
-      const pnlPoint: PnlPoint = {
-        ts: fill.ts,
-        unrealized_pnl: 0,
-        realized_pnl: parseFloat(fill.fee) || 0,
-      };
-      return {
-        ...state,
-        fills: cap(state.fills, fill, 100),
-        pnlHistory: [...state.pnlHistory, pnlPoint].slice(-200),
-      };
+      // Fills are recorded in the fills list; PnL sampling is driven by POSITION
+      // updates which carry authoritative unrealized + realized figures.
+      return { ...state, fills: cap(state.fills, action.payload, 100) };
     }
 
     case "POSITION": {
       const pos = action.payload;
+      const nowMs = Date.now();
+      const shouldSample = nowMs - state._lastPnlSampleMs >= PNL_SAMPLE_INTERVAL_MS;
+
+      // Aggregate PnL across all positions (updated position + existing ones).
+      const updatedPositions = { ...state.positions, [pos.instrument]: pos };
+      const totalUnrealized = Object.values(updatedPositions).reduce(
+        (sum, p) => sum + (parseFloat(p.unrealized_pnl) || 0), 0
+      );
+      const totalRealized = Object.values(updatedPositions).reduce(
+        (sum, p) => sum + (parseFloat(p.realized_pnl) || 0), 0
+      );
+
+      if (!shouldSample) {
+        return { ...state, positions: updatedPositions };
+      }
+
       const pnlPoint: PnlPoint = {
         ts: pos.ts,
-        unrealized_pnl: parseFloat(pos.unrealized_pnl) || 0,
-        realized_pnl: parseFloat(pos.realized_pnl) || 0,
+        unrealized_pnl: totalUnrealized,
+        realized_pnl: totalRealized,
       };
+      const nextPnlHistory = state.pnlHistory.length >= PNL_HISTORY_LIMIT
+        ? [...state.pnlHistory.slice(-(PNL_HISTORY_LIMIT - 1)), pnlPoint]
+        : [...state.pnlHistory, pnlPoint];
+
       return {
         ...state,
-        positions: { ...state.positions, [pos.instrument]: pos },
-        pnlHistory: [...state.pnlHistory, pnlPoint].slice(-200),
+        positions: updatedPositions,
+        pnlHistory: nextPnlHistory,
+        _lastPnlSampleMs: nowMs,
       };
     }
 

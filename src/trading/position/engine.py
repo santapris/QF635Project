@@ -27,6 +27,7 @@ Design choices:
 
 from __future__ import annotations
 
+import asyncio
 import structlog
 from decimal import Decimal
 
@@ -58,11 +59,13 @@ class PositionEngine:
         clock: Clock,
         method: AccountingMethod = AccountingMethod.WAVG,
         source: str = "position_engine",
+        mark_interval_seconds: float = 5.0,
     ) -> None:
         self._bus = bus
         self._clock = clock
         self._method = method
         self._source = source
+        self._mark_interval = mark_interval_seconds
 
         # (strategy_id, instrument_id) -> book
         self._books: dict[tuple[StrategyId, str], AccountingBook] = {}
@@ -73,6 +76,7 @@ class PositionEngine:
         self._marks: dict[str, Price] = {}
         self._started = False
         self._dropped_events: int = 0
+        self._mark_task: asyncio.Task | None = None
 
     # --- Lifecycle --------------------------------------------------------
 
@@ -82,9 +86,28 @@ class PositionEngine:
         self._started = True
         await self._bus.subscribe(Topic.FILLS, self._on_fill)
         await self._bus.subscribe(Topic.MARKET_DATA, self._on_market_data)
+        self._mark_task = asyncio.create_task(
+            self._mark_loop(), name="position-mark-to-market"
+        )
 
     async def stop(self) -> None:
         self._started = False
+        if self._mark_task is not None:
+            self._mark_task.cancel()
+            try:
+                await self._mark_task
+            except asyncio.CancelledError:
+                pass
+            self._mark_task = None
+
+    async def _mark_loop(self) -> None:
+        """Periodically call mark_to_market_all() to keep PnL fresh for the dashboard."""
+        try:
+            while True:
+                await asyncio.sleep(self._mark_interval)
+                await self.mark_to_market_all()
+        except asyncio.CancelledError:
+            pass
 
     # --- Event handlers ---------------------------------------------------
 

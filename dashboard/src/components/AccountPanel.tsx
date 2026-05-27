@@ -4,6 +4,7 @@ import Box from "@mui/material/Box";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { AccountSnapshot, AccountBalance } from "../store/pipelineStore";
+import { formatTs } from "../utils/formatTs";
 
 const columns: GridColDef<AccountBalance & { id: string; total: string }>[] = [
   { field: "asset", headerName: "Asset", flex: 1, minWidth: 80 },
@@ -32,7 +33,7 @@ export default function AccountPanel({ account }: Props) {
         </Typography>
         {account && (
           <Typography variant="caption" color="text.secondary">
-            {new Date(account.ts).toLocaleTimeString()}
+            {formatTs(account.ts)}
           </Typography>
         )}
       </Box>
