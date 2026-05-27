@@ -278,10 +278,6 @@ class BinanceRESTClient:
             full_url = f"{url}?{query}" if query else url
             body = None
             req_headers = dict(headers)
-        _log.debug(
-            "binance_http_request",
-            method=method, url=full_url, body=body,
-        )
         try:
             async with self._session.request(
                 method, full_url, headers=req_headers, data=body

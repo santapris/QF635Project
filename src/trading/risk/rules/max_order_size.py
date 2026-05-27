@@ -11,7 +11,7 @@ entirely (which would let the strategy retry on the next signal).
 
 from __future__ import annotations
 
-from ...core.events import SignalEvent
+from ...core.events import OrderLeg, SignalEvent
 from ...core.types import Quantity
 from ..base import AbstractRiskRule, RuleResult
 from ..state import RiskState
@@ -29,8 +29,8 @@ class MaxOrderSizeRule(AbstractRiskRule):
     def name(self) -> str:
         return "max_order_size"
 
-    def evaluate(self, signal: SignalEvent, state: RiskState) -> RuleResult:
-        if signal.target_quantity <= self._max_quantity:
+    def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
+        if leg.quantity <= self._max_quantity:
             return RuleResult.approve(self.name)
         return RuleResult.approve(self.name, clamp_to=self._max_quantity)
 

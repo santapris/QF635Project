@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from ...core.events import SignalEvent
+from ...core.events import OrderLeg, SignalEvent
 from ..base import AbstractRiskRule, RuleResult
 from ..state import RiskState
 
@@ -26,7 +26,7 @@ class InstrumentAllowlistRule(AbstractRiskRule):
     def name(self) -> str:
         return "instrument_allowlist"
 
-    def evaluate(self, signal: SignalEvent, state: RiskState) -> RuleResult:
+    def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
         iid = signal.instrument.instrument_id
         if iid in self._allowed:
             return RuleResult.approve(self.name)

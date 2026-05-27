@@ -20,20 +20,20 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from ..core.events import SignalEvent
+from ..core.events import OrderLeg, SignalEvent
 from ..core.types import Quantity, Severity
 
 
 @dataclass(frozen=True, slots=True)
 class RuleResult:
-    """One rule's verdict on one signal."""
+    """One rule's verdict on one leg."""
 
     rule_name: str
     approved: bool
     severity: Severity = Severity.INFO
     reason: str = ""
     approved_quantity: Quantity | None = None
-    """If set on an approving result, suggests the signal be clamped to this size.
+    """If set on an approving result, suggests the leg be clamped to this size.
 
     The engine takes ``min(approved_quantity)`` across all approving rules
     that set this; the original requested quantity is the implicit ceiling.
@@ -73,8 +73,8 @@ class AbstractRiskRule(ABC):
         """Short, stable name used in events and logs. e.g. 'max_position'."""
 
     @abstractmethod
-    def evaluate(self, signal: SignalEvent, state: "RiskState") -> RuleResult:  # noqa: F821
-        """Decide whether ``signal`` is acceptable. Must be pure and fast."""
+    def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: "RiskState") -> RuleResult:  # noqa: F821
+        """Decide whether ``leg`` within ``signal`` is acceptable. Must be pure and fast."""
 
 
 __all__ = ["AbstractRiskRule", "RuleResult"]

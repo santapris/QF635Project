@@ -130,20 +130,77 @@ class FundingRateEvent(BaseEvent):
 # --- Strategy --------------------------------------------------------------
 
 
+class OrderLeg(BaseModel):
+    """One order within a :class:`SignalEvent`.
+
+    A leg is the atomic unit of a strategy's desired state: one side, one
+    price, one size, and the order parameters the OMS should use when placing
+    it. Strategies with a single order pass one leg; market-makers pass two
+    (bid + ask); ladder/spread strategies may pass more — including multiple
+    legs on the same side at different price levels, which is why each leg
+    carries a stable ``leg_id`` rather than being keyed by side.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    leg_id: str = Field(
+        default_factory=lambda: uuid4().hex[:12],
+        description=(
+            "Stable identifier for this leg within its signal. Used by risk "
+            "and OMS to address legs unambiguously when multiple legs may "
+            "share a side (e.g. a price ladder)."
+        ),
+    )
+    side: Side
+    quantity: Quantity
+    price: Price | None = Field(
+        default=None,
+        description="Limit price. None for market orders.",
+    )
+    order_type: OrderType = OrderType.MARKET
+    time_in_force: TimeInForce = TimeInForce.IOC
+
+
 class SignalEvent(BaseEvent):
-    """A strategy's intent to trade. Not yet an order — risk hasn't seen it."""
+    """A strategy's complete desired order state for one instrument.
+
+    ``legs`` is the full set of orders the strategy wants resting on the
+    exchange for this instrument right now. The OMS treats this as final
+    state — it reconciles open orders against the legs tuple and:
+
+    - Places legs that have no matching open order.
+    - Cancels open orders that have no matching leg (strategy withdrew them).
+    - Leaves open orders whose leg is unchanged (preserves queue position).
+    - Cancel-replaces open orders whose price or size changed.
+
+    An empty ``legs`` tuple means "cancel everything for this instrument."
+
+    ``atomic`` controls how risk handles partial rejection:
+
+    - ``atomic=False`` (default, market-making semantics): legs are
+      independent. Risk evaluates each leg and drops the ones that fail;
+      surviving legs flow through. Use for quote sets where each side
+      stands alone.
+    - ``atomic=True`` (pairs/hedged semantics): the legs must succeed or
+      fail together. If any leg fails risk, the whole signal is rejected
+      and no orders are placed. Use when one leg without the other leaves
+      a worse position than not trading at all.
+    """
 
     event_type: Literal["signal"] = "signal"
     strategy_id: StrategyId
     instrument: Instrument
-    side: Side
-    target_quantity: Quantity = Field(..., description="Absolute quantity to trade.")
-    suggested_price: Price | None = Field(
-        default=None,
-        description="If provided, hint to the OMS for limit pricing.",
+    legs: tuple[OrderLeg, ...] = Field(
+        default=(),
+        description="Desired orders. Empty means withdraw all open orders for this instrument.",
     )
-    order_type: OrderType = OrderType.MARKET
-    time_in_force: TimeInForce = TimeInForce.IOC
+    atomic: bool = Field(
+        default=False,
+        description=(
+            "If True, any leg rejection rejects the whole signal. Use for "
+            "pairs/hedged trades where partial fills are worse than none."
+        ),
+    )
     rationale: str = Field(default="", description="Human-readable reason for audit.")
     metadata: dict[str, str] = Field(default_factory=dict)
 
@@ -151,8 +208,47 @@ class SignalEvent(BaseEvent):
 # --- Risk ------------------------------------------------------------------
 
 
+class ApprovedLeg(BaseModel):
+    """Risk engine's verdict on one approved leg of a signal."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    leg_id: str
+    """Matches the originating ``OrderLeg.leg_id``."""
+    side: Side
+    approved_quantity: Quantity
+    """Quantity approved by risk — may be less than requested if clamped."""
+
+
+class RejectedLeg(BaseModel):
+    """Risk engine's verdict on a rejected leg of a signal.
+
+    Preserved on every ``RiskDecision`` so downstream consumers (audit,
+    dashboards) can attribute partial-approval cases to specific rules.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    leg_id: str
+    side: Side
+    rule_name: str
+    reason: str
+    severity: Severity = Severity.INFO
+
+
 class RiskDecision(BaseEvent):
-    """Risk engine's verdict on a signal. Approved decisions become orders."""
+    """Risk engine's verdict on a signal. Approved decisions become orders.
+
+    Semantics:
+
+    - ``approved=True`` and ``len(approved_legs) == len(signal.legs)``:
+      every leg passed.
+    - ``approved=True`` and ``len(rejected_legs) > 0``: partial approval
+      (only possible when ``signal.atomic=False``). The OMS places the
+      approved legs; rejected_legs is informational.
+    - ``approved=False``: nothing is placed. ``rejected_legs`` enumerates
+      which legs failed and why.
+    """
 
     event_type: Literal["risk_decision"] = "risk_decision"
     signal_event_id: EventId
@@ -164,8 +260,11 @@ class RiskDecision(BaseEvent):
         description="Rule that produced the verdict (only set on rejection).",
     )
     reason: str = ""
-    # Risk may modify the size downward (e.g. clamp to remaining headroom).
-    approved_quantity: Quantity | None = None
+    # Legs that passed risk. Empty when approved=False.
+    approved_legs: tuple[ApprovedLeg, ...] = Field(default=())
+    # Legs that failed risk. Non-empty on outright rejection and on
+    # partial approval; preserved for audit/observability.
+    rejected_legs: tuple[RejectedLeg, ...] = Field(default=())
 
 
 class RiskAlertEvent(BaseEvent):
@@ -348,6 +447,7 @@ __all__ = [
     "AccountBalance",
     "AccountSnapshotEvent",
     "AmendRequest",
+    "ApprovedLeg",
     "BaseEvent",
     "CancelRequest",
     "Event",
@@ -359,7 +459,9 @@ __all__ = [
     "OrderBookLevel",
     "OrderCancelled",
     "OrderRejected",
+    "OrderLeg",
     "OrderRequest",
+    "RejectedLeg",
     "PnLSnapshotEvent",
     "PositionUpdateEvent",
     "RiskAlertEvent",

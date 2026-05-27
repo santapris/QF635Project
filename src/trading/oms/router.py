@@ -1,12 +1,17 @@
 """Order router.
 
-For now: one venue, choice of execution algorithm. The router reads
-``SignalEvent.metadata["execution_algo"]`` and the matching parameters,
-then constructs the right :class:`ExecutionAlgo`. Defaults to
-:class:`ImmediateAlgo` when no algo is specified.
+NOTE: currently unused by the OMS. The engine moved to a per-leg
+reconciliation model (see :class:`~trading.oms.engine.OMSEngine`),
+which submits each :class:`OrderLeg` directly rather than through an
+:class:`ExecutionAlgo`. This module is kept as the integration point
+for when per-leg execution algos (TWAP/VWAP slicing of a single leg's
+quantity, smart-order routing across venues) are reintroduced — at
+which point ``route`` should take an :class:`OrderLeg` rather than a
+whole :class:`SignalEvent`.
 
-Future multi-venue routing (smart-order routing across exchanges) would
-extend this same module without touching the OMS engine.
+For now: one venue, choice of execution algorithm based on
+``SignalEvent.metadata["execution_algo"]``. Defaults to
+:class:`ImmediateAlgo`.
 """
 
 from __future__ import annotations
@@ -32,12 +37,14 @@ class OrderRouter:
         """Pick an algo for this signal and approved size."""
         algo_name = signal.metadata.get("execution_algo", "immediate").lower()
 
+        leg = signal.legs[0]
+
         if algo_name == "immediate":
             return ImmediateAlgo(
                 quantity=approved_quantity,
-                order_type=signal.order_type,
-                time_in_force=signal.time_in_force,
-                price=signal.suggested_price,
+                order_type=leg.order_type,
+                time_in_force=leg.time_in_force,
+                price=leg.price,
             )
 
         if algo_name == "twap":
@@ -48,9 +55,9 @@ class OrderRouter:
                 duration_seconds=duration,
                 num_slices=num_slices,
                 start_ns=now_ns,
-                order_type=signal.order_type,
-                time_in_force=signal.time_in_force,
-                price=signal.suggested_price,
+                order_type=leg.order_type,
+                time_in_force=leg.time_in_force,
+                price=leg.price,
             )
 
         if algo_name == "vwap":
@@ -62,9 +69,9 @@ class OrderRouter:
                 duration_seconds=duration,
                 profile=profile,
                 start_ns=now_ns,
-                order_type=signal.order_type,
-                time_in_force=signal.time_in_force,
-                price=signal.suggested_price,
+                order_type=leg.order_type,
+                time_in_force=leg.time_in_force,
+                price=leg.price,
             )
 
         raise ConfigError(

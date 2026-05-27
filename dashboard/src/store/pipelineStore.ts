@@ -150,7 +150,7 @@ export type PipelineAction =
   | { type: "RISK"; payload: RiskRow }
   | { type: "ORDER"; payload: OrderRow }
   | { type: "FILL"; payload: FillRow }
-  | { type: "POSITION"; payload: PositionRow }
+  | { type: "POSITIONS_SNAPSHOT"; payload: PositionRow[] }
   | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
   | { type: "CLEAR_LOGS" };
@@ -218,26 +218,30 @@ export function pipelineReducer(
       return { ...state, fills: cap(state.fills, action.payload, 100) };
     }
 
-    case "POSITION": {
-      const pos = action.payload;
+    case "POSITIONS_SNAPSHOT": {
+      // Replace the positions map outright. Anything not in the new
+      // snapshot has gone flat on the server side and should disappear
+      // from the panel — that's exactly the snapshot semantics we want.
+      const rows = action.payload;
+      const updatedPositions: Record<string, PositionRow> = {};
+      for (const row of rows) {
+        updatedPositions[row.instrument] = row;
+      }
+
       const nowMs = Date.now();
       const shouldSample = nowMs - state._lastPnlSampleMs >= PNL_SAMPLE_INTERVAL_MS;
-
-      // Aggregate PnL across all positions (updated position + existing ones).
-      const updatedPositions = { ...state.positions, [pos.instrument]: pos };
-      const totalUnrealized = Object.values(updatedPositions).reduce(
-        (sum, p) => sum + (parseFloat(p.unrealized_pnl) || 0), 0
-      );
-      const totalRealized = Object.values(updatedPositions).reduce(
-        (sum, p) => sum + (parseFloat(p.realized_pnl) || 0), 0
-      );
-
       if (!shouldSample) {
         return { ...state, positions: updatedPositions };
       }
 
+      const totalUnrealized = rows.reduce(
+        (sum: number, p: PositionRow) => sum + (parseFloat(p.unrealized_pnl) || 0), 0
+      );
+      const totalRealized = rows.reduce(
+        (sum: number, p: PositionRow) => sum + (parseFloat(p.realized_pnl) || 0), 0
+      );
       const pnlPoint: PnlPoint = {
-        ts: pos.ts,
+        ts: nowMs,
         unrealized_pnl: totalUnrealized,
         realized_pnl: totalRealized,
       };

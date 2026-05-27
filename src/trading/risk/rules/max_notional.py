@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from ...core.events import SignalEvent
+from ...core.events import OrderLeg, SignalEvent
 from ...core.types import Price, Quantity
 from ..base import AbstractRiskRule, RuleResult
 from ..state import RiskState
@@ -33,14 +33,14 @@ class MaxNotionalRule(AbstractRiskRule):
     def name(self) -> str:
         return "max_notional"
 
-    def evaluate(self, signal: SignalEvent, state: RiskState) -> RuleResult:
-        price = signal.suggested_price
+    def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
+        price = leg.price
         if price is None or price <= 0:
             # Can't enforce without a price. Approve and let other rules
             # (max_order_size, max_position) catch egregious sizes.
             return RuleResult.approve(self.name)
 
-        notional = price * signal.target_quantity
+        notional = price * leg.quantity
         if notional <= self._max_notional:
             return RuleResult.approve(self.name)
 

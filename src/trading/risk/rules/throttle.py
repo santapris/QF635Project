@@ -11,7 +11,7 @@ down." Approving a fraction of the next signal would still be too fast.
 
 from __future__ import annotations
 
-from ...core.events import SignalEvent
+from ...core.events import OrderLeg, SignalEvent
 from ...core.types import Severity
 from ..base import AbstractRiskRule, RuleResult
 from ..state import RiskState
@@ -32,7 +32,7 @@ class ThrottleRule(AbstractRiskRule):
     def name(self) -> str:
         return "throttle"
 
-    def evaluate(self, signal: SignalEvent, state: RiskState) -> RuleResult:
+    def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
         # The state's recent-signal window includes the *current* signal —
         # the engine records it before running rules. So the comparison is
         # "are we at or above the cap *including this one*".

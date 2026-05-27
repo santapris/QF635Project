@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from ...core.events import SignalEvent
+from ...core.events import OrderLeg, SignalEvent
 from ...core.types import Price, Severity
 from ..base import AbstractRiskRule, RuleResult
 from ..state import RiskState
@@ -30,7 +30,7 @@ class DailyLossLimitRule(AbstractRiskRule):
     def name(self) -> str:
         return "daily_loss_limit"
 
-    def evaluate(self, signal: SignalEvent, state: RiskState) -> RuleResult:
+    def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
         pnl = state.get_realized_pnl_today(signal.strategy_id)
         if pnl <= self._floor:
             return RuleResult.reject(

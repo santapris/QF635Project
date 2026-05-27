@@ -29,7 +29,7 @@ from decimal import Decimal
 from typing import Final
 
 from ...core.clock import Clock
-from ...core.events import RiskAlertEvent
+from ...core.events import AccountBalance, AccountSnapshotEvent, RiskAlertEvent
 from ...core.instruments import Instrument
 from ...core.types import Severity, StrategyId
 from ...event_bus.base import AbstractEventBus, Topic
@@ -95,6 +95,10 @@ class BalanceReconciler:
     # --- Main loop -------------------------------------------------------
 
     async def _run_loop(self) -> None:
+        # Subscriber-ordering invariant: the runner starts the dashboard
+        # (and any other AccountSnapshotEvent subscriber) before this
+        # reconciler, so the first reconcile_once() lands after they're
+        # registered. See trading.runners.examples.binance_testnet.
         interval = self._config.reconcile_interval_seconds
         while not self._stop:
             try:
@@ -111,21 +115,44 @@ class BalanceReconciler:
     async def reconcile_once(self) -> dict[str, tuple[Decimal, Decimal]]:
         """One reconciliation pass. Returns ``{asset: (venue, ours)}``.
 
-        Public so an operator script can call it on demand.
+        Also publishes an ``AccountSnapshotEvent`` so the dashboard can
+        display balances without waiting for the user-data stream's first
+        push (which only fires on balance changes). Public so an operator
+        script can call it on demand.
         """
         account = await self._rest.request(
             "GET", self._config.account_path,
             signed=True, weight=_W_ACCOUNT,
         )
-        # Spot - balances
-        balances_raw = account.get("balances", []) or account.get("assets", []) or []
+        # Spot returns "balances" with free/locked; Futures returns "assets"
+        # with walletBalance. Pick the schema by which top-level key exists,
+        # then key into each row by *membership* rather than truthiness — a
+        # legitimate "0" string is truthy in Python but Decimal("0") is not,
+        # so `b.get("free") or b.get("walletBalance")` would misbehave on
+        # futures rows that happen to also carry a zero "free".
+        if "balances" in account:
+            balances_raw = account.get("balances", []) or []
+            schema = "spot"
+        else:
+            balances_raw = account.get("assets", []) or []
+            schema = "futures"
+
         venue_balances: dict[str, Decimal] = {}
+        snapshot_balances: list[AccountBalance] = []
         for b in balances_raw:
             asset = b["asset"]
-            free = Decimal(str(b.get("free", "0") or b.get("walletBalance", "0")))
-            locked = Decimal(str(b.get("locked", "0")))
+            if schema == "spot":
+                free = Decimal(str(b.get("free", "0")))
+                locked = Decimal(str(b.get("locked", "0")))
+            else:
+                free = Decimal(str(b.get("walletBalance", "0")))
+                locked = Decimal("0")
             if free + locked > 0:
                 venue_balances[asset] = free + locked
+                snapshot_balances.append(
+                    AccountBalance(asset=asset, free=free, locked=locked)
+                )
+        await self._publish_account_snapshot(snapshot_balances)
 
         # Aggregate our positions by base-currency asset.
         # We sum across all strategies — the venue doesn't know about
@@ -175,6 +202,19 @@ class BalanceReconciler:
                     "internal_position": str(ours),
                     "diff": str(diff),
                 },
+            ),
+        )
+
+    async def _publish_account_snapshot(
+        self, balances: list[AccountBalance]
+    ) -> None:
+        await self._bus.publish(
+            Topic.ACCOUNT,
+            AccountSnapshotEvent(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source="binance-reconciler",
+                balances=tuple(balances),
             ),
         )
 

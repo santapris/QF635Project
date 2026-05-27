@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from ...core.events import SignalEvent
+from ...core.events import OrderLeg, SignalEvent
 from ...core.types import Quantity, Side
 from ..base import AbstractRiskRule, RuleResult
 from ..state import RiskState
@@ -41,10 +41,10 @@ class MaxPositionRule(AbstractRiskRule):
     def name(self) -> str:
         return "max_position"
 
-    def evaluate(self, signal: SignalEvent, state: RiskState) -> RuleResult:
+    def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
         current = state.get_position(signal.strategy_id, signal.instrument)
 
-        if signal.side is Side.BUY:
+        if leg.side is Side.BUY:
             # After fill we'd be at current + qty. Ceiling is +max_long.
             headroom = self._max_long - current
         else:
@@ -60,8 +60,7 @@ class MaxPositionRule(AbstractRiskRule):
                     f"max_long={self._max_long}, max_short={-self._max_short}"
                 ),
             )
-        if headroom < signal.target_quantity:
-            # Clamp to what's available.
+        if headroom < leg.quantity:
             return RuleResult.approve(self.name, clamp_to=Quantity(headroom))
         return RuleResult.approve(self.name)
 

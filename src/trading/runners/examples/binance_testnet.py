@@ -167,8 +167,12 @@ async def _amain() -> int:
     )
 
     # --- Dashboard ----------------------------------------------------
+    # Pass position_engine so the REST /state/positions endpoint can read
+    # live state directly from the engine (no event-bus replay needed).
     dashboard = (
-        DashboardServer(bus=bus, port=settings.dashboard_port)
+        DashboardServer(
+            bus=bus, port=settings.dashboard_port, position_engine=position,
+        )
         if settings.dashboard_port > 0
         else None
     )
@@ -189,11 +193,13 @@ async def _amain() -> int:
     await strategies.start()
     await listen_keys.start()
     await user_data.start()
-    await reconciler.start()
     await bus.start()
     await heartbeat.start()
+    # Dashboard must start before reconciler so it subscribes to Topic.ACCOUNT
+    # before the reconciler's first reconcile_once() publishes a snapshot.
     if dashboard is not None:
         await dashboard.start()
+    await reconciler.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="binance-feed-handler")
 
     # --- Shutdown handling --------------------------------------------

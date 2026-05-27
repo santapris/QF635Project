@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from ...core.events import FillEvent, SignalEvent, TickEvent
+from ...core.events import FillEvent, OrderLeg, SignalEvent, TickEvent
 from ...core.instruments import Instrument
 from ...core.types import OrderType, Quantity, Side, StrategyId, TimeInForce
 from ..base import AbstractStrategy
@@ -125,19 +125,38 @@ class MarketMakingStrategy(AbstractStrategy):
         bid_price = instrument.round_price(mid - half_spread + skew)
         ask_price = instrument.round_price(mid + half_spread + skew)
 
-        signals: list[SignalEvent] = []
+        legs: list[OrderLeg] = []
 
         # Withdraw a side once we hit the inventory cap.
         if inventory < self._max_position:
-            signals.append(self._quote(ctx, event, Side.BUY, bid_price))
+            legs.append(OrderLeg(
+                side=Side.BUY,
+                price=bid_price,
+                quantity=self._quote_size,
+                order_type=OrderType.POST_ONLY,
+                time_in_force=TimeInForce.GTC,
+            ))
         if inventory > -self._max_position:
-            signals.append(self._quote(ctx, event, Side.SELL, ask_price))
+            legs.append(OrderLeg(
+                side=Side.SELL,
+                price=ask_price,
+                quantity=self._quote_size,
+                order_type=OrderType.POST_ONLY,
+                time_in_force=TimeInForce.GTC,
+            ))
 
-        if signals:
-            self._last_quote_ns[instrument_id] = now_ns
-            self._last_quoted_mid[instrument_id] = mid
+        self._last_quote_ns[instrument_id] = now_ns
+        self._last_quoted_mid[instrument_id] = mid
 
-        return signals
+        return [SignalEvent(
+            ts_event=event.ts_event,
+            ts_ingest=now_ns,
+            source=f"strategy:{ctx.strategy_id}",
+            strategy_id=ctx.strategy_id,
+            instrument=instrument,
+            legs=tuple(legs),
+            rationale=f"market-make mid={mid}",
+        )]
 
     async def on_fill(
         self, event: FillEvent, ctx: StrategyContext
@@ -151,27 +170,6 @@ class MarketMakingStrategy(AbstractStrategy):
             fill_price=event.fill_price, leaves_quantity=event.leaves_quantity,
         )
         return []
-
-    def _quote(
-        self,
-        ctx: StrategyContext,
-        event: TickEvent,
-        side: Side,
-        price: Decimal,
-    ) -> SignalEvent:
-        return SignalEvent(
-            ts_event=event.ts_event,
-            ts_ingest=ctx.clock.now_ns(),
-            source=f"strategy:{ctx.strategy_id}",
-            strategy_id=ctx.strategy_id,
-            instrument=event.instrument,
-            side=side,
-            target_quantity=self._quote_size,
-            suggested_price=price,
-            order_type=OrderType.POST_ONLY,
-            time_in_force=TimeInForce.GTC,
-            rationale=f"market-make {side.value} @ {price}",
-        )
 
 
 __all__ = ["MarketMakingStrategy"]

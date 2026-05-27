@@ -1,14 +1,28 @@
-"""Real-time dashboard WebSocket server.
+"""Real-time dashboard server.
 
-Subscribes to all pipeline bus topics and broadcasts every event as a JSON
-message to connected browser clients. Also injects a structlog processor so
-that log records are forwarded on the ``logs`` pseudo-topic.
+Two channels with distinct semantics:
+
+- ``GET  /state/positions`` and ``GET /state/account`` are *snapshot*
+  endpoints. They return the current state-of-the-world (open positions,
+  exchange-reported balances) by reading directly from the
+  :class:`~trading.position.engine.PositionEngine` and from the latest
+  :class:`AccountSnapshotEvent` cached locally. The frontend fetches
+  these on mount and polls them periodically — works regardless of
+  whether the user opens the dashboard before or after pipeline start.
+- ``WS /ws`` is the *event stream*. It carries activity events (ticks,
+  trades, signals, risk decisions, orders, fills, alerts) and log
+  records. Clients see only events that fire while connected. No
+  state-of-the-world topics are pushed on the WS — those belong to the
+  REST endpoints.
+
+This split matches how production dashboards typically work: state is
+queryable and cacheable; events are streamed.
 
 Usage (wire into any stage or LiveApp)::
 
     from trading.monitoring import DashboardServer
 
-    dashboard = DashboardServer(bus=bus, port=8765)  # binds 0.0.0.0 by default
+    dashboard = DashboardServer(bus=bus, port=8765, position_engine=position)
     await dashboard.start()
     # ...run app...
     await dashboard.stop()
@@ -16,29 +30,13 @@ Usage (wire into any stage or LiveApp)::
 Wire-in for LiveApp is handled automatically when ``dashboard_port`` is set
 in the app config; see :class:`~trading.config.builder.LiveApp`.
 
-Message envelope
-----------------
-Every WebSocket message is a JSON object::
+WebSocket envelope::
 
     {
         "topic":      "fills",          # bus topic name, or "logs"
         "event_type": "FillEvent",
         "timestamp":  "2026-05-23T...", # ISO-8601, ms precision
         "data":       { ...fields... }
-    }
-
-For log records the envelope is::
-
-    {
-        "topic":      "logs",
-        "event_type": "LogRecord",
-        "timestamp":  "2026-05-23T...",
-        "data": {
-            "level":   "warning",
-            "logger":  "trading.risk.engine",
-            "message": "signal_rejected",
-            "extra":   { "reason": "max_position_exceeded" }
-        }
     }
 """
 
@@ -50,24 +48,26 @@ import logging
 import threading
 from collections.abc import MutableSet
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from ..core.events import BaseEvent
+from ..core.events import AccountSnapshotEvent, BaseEvent
 from ..event_bus.base import AbstractEventBus, Topic
+
+if TYPE_CHECKING:
+    from ..position.engine import PositionEngine
 
 _log = structlog.get_logger(__name__)
 
-# Topics the server subscribes to.
-_TOPICS = (
+# Bus topics streamed on the WebSocket as activity events. Position/account
+# state is intentionally NOT included — clients query REST for those.
+_STREAM_TOPICS = (
     Topic.MARKET_DATA,
     Topic.SIGNALS,
     Topic.RISK_DECISIONS,
     Topic.ORDERS,
     Topic.FILLS,
-    Topic.POSITIONS,
-    Topic.ACCOUNT,
     Topic.ALERTS,
 )
 
@@ -132,17 +132,21 @@ class _StructlogForwarder:
 
 
 class DashboardServer:
-    """FastAPI + uvicorn WebSocket server that broadcasts pipeline events.
+    """REST + WebSocket server backing the operator dashboard.
 
     Parameters
     ----------
     bus:
-        The application event bus. Subscribed to all pipeline topics on
+        The application event bus. Subscribed to streaming topics on
         :meth:`start`.
     port:
-        TCP port for the WebSocket server (default ``8765``).
+        TCP port (default ``8765``).
     host:
         Bind address (default ``0.0.0.0`` — all interfaces, needed for WSL2).
+    position_engine:
+        Optional reference to the running :class:`PositionEngine`. When
+        present, ``GET /state/positions`` reads live state directly from
+        the engine; otherwise the endpoint returns an empty list.
     """
 
     def __init__(
@@ -151,15 +155,22 @@ class DashboardServer:
         bus: AbstractEventBus,
         port: int = 8765,
         host: str = "0.0.0.0",
+        position_engine: "PositionEngine | None" = None,
     ) -> None:
         self._bus = bus
         self._port = port
         self._host = host
+        self._position_engine = position_engine
         self._clients: MutableSet[Any] = set()
         self._broadcast_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10_000)
         self._broadcaster_task: asyncio.Task[None] | None = None
         self._server: Any = None  # uvicorn Server instance
         self._server_thread: threading.Thread | None = None
+        # Latest exchange-reported account snapshot. Written by the bus
+        # handler on the trading loop thread, read by REST handlers on the
+        # uvicorn thread. Python dict and tuple assignment is atomic under
+        # the GIL, so a plain attribute is sufficient — no lock needed.
+        self._latest_account: AccountSnapshotEvent | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -176,18 +187,18 @@ class DashboardServer:
             )
             return
 
-        # Subscribe to all bus topics.
-        for topic in _TOPICS:
-            await self._bus.subscribe(topic, self._on_event_factory(topic))
+        # Subscribe to streaming topics for the WS broadcast.
+        for topic in _STREAM_TOPICS:
+            await self._bus.subscribe(topic, self._on_stream_event_factory(topic))
+        # Also subscribe to ACCOUNT just to keep the latest snapshot in
+        # memory for the REST endpoint — not broadcast on the WS.
+        await self._bus.subscribe(Topic.ACCOUNT, self._on_account_event)
 
         # Inject structlog forwarder.
         self._inject_structlog_processor()
 
-        # Build FastAPI app.
+        # Build app and run uvicorn in a background thread.
         app = self._build_app()
-
-        # Run uvicorn in a background thread so it has its own event loop
-        # and does not fight the trading app for signal handlers.
         config = uvicorn.Config(
             app,
             host=self._host,
@@ -225,15 +236,57 @@ class DashboardServer:
         _log.info("dashboard_server_stopped")
 
     # ------------------------------------------------------------------
+    # State endpoints (REST)
+    # ------------------------------------------------------------------
+
+    def _positions_payload(self) -> dict[str, Any]:
+        engine = self._position_engine
+        positions: list[dict[str, Any]] = []
+        if engine is not None:
+            for position in engine.get_all_positions():
+                positions.append({
+                    "strategy_id": str(position.strategy_id),
+                    "instrument": position.instrument.symbol,
+                    "quantity": str(position.quantity),
+                    "average_entry_price": str(position.average_entry_price),
+                    "realized_pnl": str(position.realized_pnl),
+                    "unrealized_pnl": str(position.unrealized_pnl),
+                    "mark_price": str(position.mark_price),
+                })
+        return {"timestamp": _now_iso(), "positions": positions}
+
+    def _account_payload(self) -> dict[str, Any]:
+        snap = self._latest_account
+        if snap is None:
+            return {"timestamp": _now_iso(), "balances": []}
+        return {
+            "timestamp": _now_iso(),
+            "balances": [
+                {"asset": b.asset, "free": str(b.free), "locked": str(b.locked)}
+                for b in snap.balances
+            ],
+        }
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _build_app(self) -> Any:
         from starlette.applications import Starlette
-        from starlette.routing import WebSocketRoute
+        from starlette.middleware import Middleware
+        from starlette.middleware.cors import CORSMiddleware
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route, WebSocketRoute
         from starlette.websockets import WebSocket
 
         clients = self._clients
+
+        async def positions_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._positions_payload())
+
+        async def account_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._account_payload())
 
         async def websocket_endpoint(ws: WebSocket) -> None:
             await ws.accept()
@@ -250,18 +303,39 @@ class DashboardServer:
                 clients.discard(ws)
                 _log.debug("dashboard_client_disconnected", total=len(clients))
 
-        return Starlette(routes=[WebSocketRoute("/ws", websocket_endpoint)])
+        # CORSMiddleware handles both preflight OPTIONS and actual response
+        # headers for all origins. The dashboard is a read-only operator
+        # tool; permissive CORS is fine here.
+        middleware = [
+            Middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_methods=["GET", "OPTIONS"],
+                allow_headers=["*"],
+            )
+        ]
 
+        return Starlette(
+            routes=[
+                Route("/state/positions", positions_endpoint, methods=["GET"]),
+                Route("/state/account", account_endpoint, methods=["GET"]),
+                WebSocketRoute("/ws", websocket_endpoint),
+            ],
+            middleware=middleware,
+        )
 
-    def _on_event_factory(self, topic: str):  # type: ignore[return]
+    def _on_stream_event_factory(self, topic: str):  # type: ignore[return]
         async def _handler(event: BaseEvent) -> None:
             try:
                 msg = _event_to_message(topic, event)
                 self._broadcast_queue.put_nowait(msg)
             except asyncio.QueueFull:
-                pass  # drop market data bursts silently
-
+                pass  # drop bursts silently
         return _handler
+
+    async def _on_account_event(self, event: BaseEvent) -> None:
+        if isinstance(event, AccountSnapshotEvent):
+            self._latest_account = event
 
     async def _broadcast_loop(self) -> None:
         """Drain the broadcast queue and send to all connected clients."""
@@ -281,9 +355,6 @@ class DashboardServer:
     def _inject_structlog_processor(self) -> None:
         """Append a forwarder processor to the live structlog chain."""
         forwarder = _StructlogForwarder(self._broadcast_queue)
-        # structlog stores the processor chain on the bound logger wrapper.
-        # The cleanest way to append without reconfiguring everything is to
-        # wrap the current final processor.
         current = structlog.get_config()
         processors = list(current.get("processors", []))
         # Insert before the final renderer so the event_dict is still intact.

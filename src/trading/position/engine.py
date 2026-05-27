@@ -237,6 +237,24 @@ class PositionEngine:
                 out[instrument] = position
         return out
 
+    def get_all_positions(self) -> list[Position]:
+        """Every non-flat position across all strategies, marked-to-market.
+
+        Intended for read-only consumers (dashboards, snapshots) that need
+        the full state-of-the-world without knowing strategy ids up front.
+        """
+        out: list[Position] = []
+        for (sid, _iid), book in self._books.items():
+            if book.quantity == 0:
+                continue
+            instrument = self._instruments.get((sid, _iid))
+            if instrument is None:
+                continue
+            position = self.get_position(sid, instrument)
+            if position is not None:
+                out.append(position)
+        return out
+
     def get_portfolio_aggregate(
         self, *, strategy_id: StrategyId | None = None
     ) -> PortfolioAggregate:

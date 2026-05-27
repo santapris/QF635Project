@@ -5,6 +5,7 @@ import Box from "@mui/material/Box";
 import { ThemeProvider } from "@mui/material/styles";
 import { pipelineReducer, initialState } from "./store/pipelineStore";
 import { usePipelineSocket } from "./hooks/usePipelineSocket";
+import { useStatePoll } from "./hooks/useStatePoll";
 import NavBar from "./components/NavBar";
 import DashboardPage from "./pages/DashboardPage";
 import LogsPage from "./pages/LogsPage";
@@ -18,6 +19,7 @@ const TOOLBAR_HEIGHT = 48; // dense AppBar
 function AppInner() {
   const [state, dispatch] = useReducer(pipelineReducer, initialState);
   usePipelineSocket(dispatch);
+  useStatePoll(dispatch);
 
   const clearLogs = useCallback(() => dispatch({ type: "CLEAR_LOGS" }), []);
 

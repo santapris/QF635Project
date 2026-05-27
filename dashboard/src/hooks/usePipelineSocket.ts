@@ -151,39 +151,9 @@ function parseMessage(raw: string): PipelineAction | null {
         },
       };
 
-    case "positions":
-      return {
-        type: "POSITION",
-        payload: {
-          id,
-          ts,
-          strategy_id: String(data.strategy_id ?? ""),
-          instrument: String((data.instrument as Record<string,unknown>)?.symbol ?? ""),
-          quantity: String(data.quantity ?? ""),
-          average_entry_price: String(data.average_entry_price ?? ""),
-          unrealized_pnl: String(data.unrealized_pnl ?? "0"),
-          realized_pnl: String(data.realized_pnl ?? "0"),
-          mark_price: String(data.mark_price ?? ""),
-        },
-      };
-
-    case "account": {
-      const rawBalances = Array.isArray(data.balances) ? data.balances : [];
-      return {
-        type: "ACCOUNT",
-        payload: {
-          ts,
-          balances: rawBalances.map((b) => {
-            const bal = b as Record<string, unknown>;
-            return {
-              asset: String(bal.asset ?? ""),
-              free: String(bal.free ?? "0"),
-              locked: String(bal.locked ?? "0"),
-            };
-          }),
-        },
-      };
-    }
+    // Positions and account state are no longer streamed on the WS —
+    // they are served via REST /state/positions and /state/account
+    // (see useStatePoll). Any stray events on these topics are ignored.
 
     case "logs": {
       const d = data as { level?: string; logger?: string; message?: string; extra?: Record<string,string> };

@@ -12,13 +12,20 @@ Publishes to:
 - ``alerts`` whenever a rule emits ``WARN`` or above
 - ``alerts`` (KillSwitchEvent) when the kill switch trips
 
-Composition of rule results:
+Composition of rule results (per signal):
 
 1. Kill switch latched → reject immediately (no rules run).
-2. Run all rules. If *any* returns ``approved=False``:
-     - if severity is ``KILL``: engage kill switch, then reject this signal.
-     - otherwise: reject this signal with the first failing rule's reason.
-3. If all approved: ``approved_quantity = min(non-None clamps, requested_qty)``.
+2. Evaluate each leg independently against the rule chain.
+   - A rule's ``approved=False`` rejects that leg.
+   - A rule's ``approved_quantity`` clamps the leg size.
+   - A ``KILL``-severity rejection engages the kill switch and stops
+     evaluating remaining legs in this signal.
+3. Assemble the verdict based on ``signal.atomic``:
+   - ``atomic=False``: surviving legs are approved; rejected legs are
+     reported in ``rejected_legs`` for audit. If no leg survives, the
+     whole signal is rejected.
+   - ``atomic=True``: any single leg rejection rejects the whole signal.
+     No partial placement.
 
 The engine processes signals serially per coroutine — concurrent
 signal handling would race on state updates. The bus's per-subscriber
@@ -29,14 +36,15 @@ from __future__ import annotations
 
 import structlog
 from collections.abc import Iterable
-from decimal import Decimal
 
 from ..core.clock import Clock
 from ..core.events import (
+    ApprovedLeg,
     BaseEvent,
     FillEvent,
     KillSwitchEvent,
     PositionUpdateEvent,
+    RejectedLeg,
     RiskAlertEvent,
     RiskDecision,
     SignalEvent,
@@ -119,7 +127,7 @@ class RiskEngine:
         # Record before evaluation so the throttle window sees this signal.
         self._state.record_signal(event.strategy_id)
 
-        # Kill switch short-circuits everything.
+        # Kill switch short-circuits everything — reject all legs immediately.
         if self._kill_switch.engaged:
             ks = self._kill_switch.state
             await self._publish_decision(
@@ -131,67 +139,118 @@ class RiskEngine:
             )
             return
 
-        # Combine global + per-strategy rules. Global ones run first so
-        # cheap structural checks (allow-list) come before stateful ones.
         rules: list[AbstractRiskRule] = [
             *self._global_rules,
             *self._rules.get(event.strategy_id, ()),
         ]
 
-        results: list[RuleResult] = []
-        for rule in rules:
-            try:
-                result = rule.evaluate(event, self._state)
-            except Exception:
-                _log.exception(
-                    "rule_raised_treating_as_reject", rule_name=rule.name,
+        # Evaluate each leg independently. The atomic flag governs how
+        # partial-rejection is resolved at the end.
+        approved: list[ApprovedLeg] = []
+        rejected: list[RejectedLeg] = []
+        worst_severity = Severity.INFO
+        kill_triggered = False
+
+        for leg in event.legs:
+            # If a prior leg tripped the kill switch, every remaining leg
+            # is implicitly rejected — don't keep evaluating.
+            if kill_triggered:
+                rejected.append(RejectedLeg(
+                    leg_id=leg.leg_id,
+                    side=leg.side,
+                    rule_name="kill_switch",
+                    reason="kill switch engaged earlier in this signal",
+                    severity=Severity.KILL,
+                ))
+                continue
+
+            results: list[RuleResult] = []
+            for rule in rules:
+                try:
+                    result = rule.evaluate(event, leg, self._state)
+                except Exception:
+                    _log.exception(
+                        "rule_raised_treating_as_reject", rule_name=rule.name,
+                        strategy_id=event.strategy_id,
+                    )
+                    result = RuleResult.reject(
+                        rule.name,
+                        reason="rule raised exception; failing closed",
+                    )
+                results.append(result)
+                if result.severity in (Severity.WARN, Severity.BLOCK, Severity.KILL):
+                    await self._publish_alert(rule.name, result)
+                    if result.severity.value > worst_severity.value:
+                        worst_severity = result.severity
+
+            first_reject = next((r for r in results if not r.approved), None)
+            if first_reject is not None:
+                if first_reject.severity is Severity.KILL:
+                    await self._engage_kill_switch(
+                        triggered_by=first_reject.rule_name,
+                        reason=first_reject.reason,
+                    )
+                    kill_triggered = True
+                _log.info(
+                    "leg_rejected_by_risk",
                     strategy_id=event.strategy_id,
-                )
-                # A buggy rule fails closed.
-                result = RuleResult.reject(
-                    rule.name,
-                    reason="rule raised exception; failing closed",
-                )
-            results.append(result)
-            # Publish WARN+ as alerts regardless of overall decision.
-            if result.severity in (Severity.WARN, Severity.BLOCK, Severity.KILL):
-                await self._publish_alert(rule.name, result)
-
-        # Find the first non-approving result (or None).
-        first_reject = next((r for r in results if not r.approved), None)
-
-        if first_reject is not None:
-            if first_reject.severity is Severity.KILL:
-                await self._engage_kill_switch(
-                    triggered_by=first_reject.rule_name,
+                    leg_id=leg.leg_id,
+                    side=leg.side.value,
+                    rule=first_reject.rule_name,
                     reason=first_reject.reason,
                 )
+                rejected.append(RejectedLeg(
+                    leg_id=leg.leg_id,
+                    side=leg.side,
+                    rule_name=first_reject.rule_name,
+                    reason=first_reject.reason,
+                    severity=first_reject.severity,
+                ))
+                continue
+
+            # Apply tightest clamp for this leg.
+            qty = leg.quantity
+            for r in results:
+                if r.approved_quantity is not None and r.approved_quantity < qty:
+                    qty = Quantity(r.approved_quantity)
+            approved.append(ApprovedLeg(
+                leg_id=leg.leg_id, side=leg.side, approved_quantity=qty,
+            ))
+
+        # Verdict assembly.
+        if event.atomic and rejected:
+            # Atomic signal with any rejection → reject the whole thing.
+            # No legs are placed even though some passed individually.
+            first = rejected[0]
             await self._publish_decision(
                 event,
                 approved=False,
-                severity=first_reject.severity,
-                rule_name=first_reject.rule_name,
-                reason=first_reject.reason,
+                severity=worst_severity,
+                rule_name=first.rule_name,
+                reason=f"atomic signal rejected: {first.reason}",
+                rejected_legs=tuple(rejected),
             )
             return
 
-        # All rules approved. Apply the tightest clamp.
-        approved_qty = event.target_quantity
-        clamping_rule: str | None = None
-        for r in results:
-            if r.approved_quantity is not None and r.approved_quantity < approved_qty:
-                approved_qty = Quantity(r.approved_quantity)
-                clamping_rule = r.rule_name
+        if not approved:
+            await self._publish_decision(
+                event,
+                approved=False,
+                severity=worst_severity,
+                rule_name=rejected[0].rule_name if rejected else None,
+                reason="all legs rejected by risk",
+                rejected_legs=tuple(rejected),
+            )
+            return
 
         await self._publish_decision(
             event,
             approved=True,
             severity=Severity.INFO,
-            rule_name=clamping_rule,
-            reason=(
-                f"clamped by {clamping_rule}" if clamping_rule else ""
-            ),
-            approved_quantity=approved_qty,
+            rule_name=None,
+            reason="" if not rejected else "some legs rejected",
+            approved_legs=tuple(approved),
+            rejected_legs=tuple(rejected),
         )
 
     async def _on_fill(self, event: BaseEvent) -> None:
@@ -243,7 +302,8 @@ class RiskEngine:
         severity: Severity,
         rule_name: str | None,
         reason: str,
-        approved_quantity: Quantity | None = None,
+        approved_legs: tuple[ApprovedLeg, ...] = (),
+        rejected_legs: tuple[RejectedLeg, ...] = (),
     ) -> None:
         await self._safe_publish(
             Topic.RISK_DECISIONS,
@@ -257,7 +317,8 @@ class RiskEngine:
                 severity=severity,
                 rule_name=rule_name,
                 reason=reason,
-                approved_quantity=approved_quantity,
+                approved_legs=approved_legs,
+                rejected_legs=rejected_legs,
             ),
         )
 
