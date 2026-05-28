@@ -1,9 +1,10 @@
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import Chip from "@mui/material/Chip";
+import Box from "@mui/material/Box";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
-import type { SignalRow } from "../store/pipelineStore";
+import type { SignalRow, OrderLeg } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
 
 const columns: GridColDef<SignalRow>[] = [
@@ -11,20 +12,25 @@ const columns: GridColDef<SignalRow>[] = [
   { field: "strategy_id", headerName: "Strategy", width: 120 },
   { field: "instrument", headerName: "Instrument", width: 120 },
   {
-    field: "side",
-    headerName: "Side",
-    width: 80,
+    field: "legs",
+    headerName: "Legs",
+    flex: 1,
+    minWidth: 200,
+    sortable: false,
     renderCell: ({ value }) => (
-      <Chip
-        label={value}
-        size="small"
-        color={value === "BUY" ? "success" : "error"}
-        sx={{ fontWeight: 700 }}
-      />
+      <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", alignItems: "center", width: "100%", height: "100%" }}>
+        {(value as OrderLeg[]).map((leg) => (
+          <Chip
+            key={leg.leg_id}
+            size="small"
+            variant="outlined"
+            label={`${leg.side} ${leg.quantity} ${leg.order_type}`}
+            color={leg.side === "BUY" ? "success" : "error"}
+          />
+        ))}
+      </Box>
     ),
   },
-  { field: "target_quantity", headerName: "Qty", width: 90, align: "right", headerAlign: "right" },
-  { field: "order_type", headerName: "Type", width: 90 },
   { field: "rationale", headerName: "Rationale", flex: 1, minWidth: 150 },
 ];
 

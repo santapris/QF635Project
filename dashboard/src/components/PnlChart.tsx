@@ -1,5 +1,6 @@
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
+import { useTheme } from "@mui/material/styles";
 import {
   ResponsiveContainer,
   LineChart,
@@ -18,6 +19,8 @@ interface Props {
 }
 
 export default function PnlChart({ pnlHistory }: Props) {
+  const theme = useTheme();
+
   return (
     <Paper sx={{ p: 2, height: "100%" }}>
       <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 700 }}>
@@ -37,12 +40,12 @@ export default function PnlChart({ pnlHistory }: Props) {
               formatter={(v: number) => v.toFixed(4)}
             />
             <Legend />
-            <ReferenceLine y={0} stroke="#888" strokeDasharray="3 3" />
+            <ReferenceLine y={0} stroke={theme.palette.divider} strokeDasharray="3 3" />
             <Line
               type="monotone"
               dataKey="unrealized_pnl"
               name="Unrealized"
-              stroke="#42a5f5"
+              stroke={theme.palette.primary.main}
               dot={false}
               isAnimationActive={false}
             />
@@ -50,7 +53,7 @@ export default function PnlChart({ pnlHistory }: Props) {
               type="monotone"
               dataKey="realized_pnl"
               name="Realized"
-              stroke="#66bb6a"
+              stroke={theme.palette.success.main}
               dot={false}
               isAnimationActive={false}
             />

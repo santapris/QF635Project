@@ -25,18 +25,82 @@ const ALL_INSTRUMENTS = "__ALL__";
 
 const tickColumns: GridColDef<TickRow>[] = [
   { field: "instrument", headerName: "Instrument", flex: 1, minWidth: 110 },
-  { field: "bid_price", headerName: "Bid", flex: 1, minWidth: 100, align: "right", headerAlign: "right" },
-  { field: "ask_price", headerName: "Ask", flex: 1, minWidth: 100, align: "right", headerAlign: "right" },
+  {
+    field: "bid_price",
+    headerName: "Bid",
+    flex: 1,
+    minWidth: 100,
+    align: "right",
+    headerAlign: "right",
+    renderCell: ({ value }) => (
+      <Typography
+        variant="body2"
+        color="success"
+        sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
+      >
+        {value}
+      </Typography>
+    ),
+  },
   { field: "bid_size", headerName: "Bid Sz", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
+  {
+    field: "ask_price",
+    headerName: "Ask",
+    flex: 1,
+    minWidth: 100,
+    align: "right",
+    headerAlign: "right",
+    renderCell: ({ value }) => (
+      <Typography
+        variant="body2"
+        color="error"
+        sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
+      >
+        {value}
+      </Typography>
+    ),
+  },
   { field: "ask_size", headerName: "Ask Sz", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
 ];
 
 const tickTapeColumns: GridColDef<TickRow>[] = [
   { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
   { field: "instrument", headerName: "Instrument", width: 110 },
-  { field: "bid_price", headerName: "Bid", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
-  { field: "ask_price", headerName: "Ask", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
+  {
+    field: "bid_price",
+    headerName: "Bid",
+    flex: 1,
+    minWidth: 90,
+    align: "right",
+    headerAlign: "right",
+    renderCell: ({ value }) => (
+      <Typography
+        variant="body2"
+        color="success"
+        sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
+      >
+        {value}
+      </Typography>
+    ),
+  },
   { field: "bid_size", headerName: "Bid Sz", width: 80, align: "right", headerAlign: "right" },
+  {
+    field: "ask_price",
+    headerName: "Ask",
+    flex: 1,
+    minWidth: 90,
+    align: "right",
+    headerAlign: "right",
+    renderCell: ({ value }) => (
+      <Typography
+        variant="body2"
+        color="error"
+        sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
+      >
+        {value}
+      </Typography>
+    ),
+  },
   { field: "ask_size", headerName: "Ask Sz", width: 80, align: "right", headerAlign: "right" },
 ];
 
@@ -51,12 +115,13 @@ const tradeColumns: GridColDef<TradeRowWithId>[] = [
     width: 90,
     renderCell: ({ value }) =>
       value ? (
-        <Chip
-          label={value}
-          size="small"
+        <Typography
+          variant="body2"
           color={value === "BUY" ? "success" : "error"}
-          sx={{ fontWeight: 700 }}
-        />
+          sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", fontWeight: 700 }}
+        >
+          {value}
+        </Typography>
       ) : null,
   },
 ];

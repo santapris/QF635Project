@@ -24,14 +24,20 @@ export interface TradeData {
   ts: number;  // ms since epoch
 }
 
+export interface OrderLeg {
+  leg_id: string;
+  side: string;
+  quantity: string;
+  price: string | null;
+  order_type: string;
+}
+
 export interface SignalRow {
   id: string;
   ts: number;  // ms since epoch
   strategy_id: string;
   instrument: string;
-  side: string;
-  target_quantity: string;
-  order_type: string;
+  legs: OrderLeg[];
   rationale: string;
 }
 

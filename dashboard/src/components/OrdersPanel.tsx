@@ -24,12 +24,13 @@ const columns: GridColDef<OrderRow>[] = [
     headerName: "Side",
     width: 80,
     renderCell: ({ value }) => (
-      <Chip
-        label={value}
-        size="small"
+      <Typography
+        variant="body2"
         color={value === "BUY" ? "success" : "error"}
-        sx={{ fontWeight: 700 }}
-      />
+        sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", fontWeight: 700 }}
+      >
+        {value}
+      </Typography>
     ),
   },
   { field: "order_type", headerName: "Type", width: 90 },

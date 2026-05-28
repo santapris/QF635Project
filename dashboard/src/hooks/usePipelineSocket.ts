@@ -83,9 +83,13 @@ function parseMessage(raw: string): PipelineAction | null {
           ts,
           strategy_id: String(data.strategy_id ?? ""),
           instrument: String((data.instrument as Record<string,unknown>)?.symbol ?? ""),
-          side: String(data.side ?? ""),
-          target_quantity: String(data.target_quantity ?? ""),
-          order_type: String(data.order_type ?? ""),
+          legs: ((data.legs as Record<string,unknown>[]) ?? []).map((leg) => ({
+            leg_id: String(leg.leg_id ?? ""),
+            side: String(leg.side ?? ""),
+            quantity: String(leg.quantity ?? ""),
+            price: leg.price != null ? String(leg.price) : null,
+            order_type: String(leg.order_type ?? ""),
+          })),
           rationale: String(data.rationale ?? ""),
         },
       };
