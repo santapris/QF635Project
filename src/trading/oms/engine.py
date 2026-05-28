@@ -40,6 +40,7 @@ from ..core.events import (
     EventId,
     ExecutionRoutedEvent,
     FillEvent,
+    OpenOrderDetail,
     OpenOrdersSnapshotEvent,
     OrderAcknowledged,
     OrderCancelled,
@@ -55,12 +56,15 @@ from ..core.exceptions import BackpressureError, InvalidStateTransitionError, Or
 from ..core.instruments import Instrument
 from ..core.types import (
     ClientOrderId,
+    ExchangeOrderId,
     OrderId,
     OrderStatus,
+    OrderType,
     Price,
     Quantity,
     Side,
     StrategyId,
+    TimeInForce,
 )
 from decimal import Decimal
 from ..event_bus.base import AbstractEventBus, Topic
@@ -71,6 +75,26 @@ from .router import DefaultExecutionRouter, ExecutionRouter, RoutingContext
 _log = structlog.get_logger(__name__)
 
 _NS_PER_SECOND = 1_000_000_000
+
+# Reserved strategy id for orders/positions adopted from the venue that we
+# cannot attribute to a known strategy (placed by a human, another system, or
+# whose client_order_id doesn't match our minting scheme). External orders are
+# tracked for risk/display but never owned by a strategy's reconciliation.
+EXTERNAL_STRATEGY_ID = StrategyId("external")
+
+
+def strategy_id_from_client_order_id(coid: str) -> StrategyId:
+    """Recover the owning strategy from a client_order_id, or EXTERNAL.
+
+    We mint client order ids as ``f"{strategy_id}-{order_id.hex[:12]}"``. The
+    trailing segment is a 12-char hex token, so the strategy id is everything
+    before the final ``-``. A coid that doesn't fit this shape was not minted
+    by us → EXTERNAL.
+    """
+    head, sep, tail = coid.rpartition("-")
+    if sep and head and len(tail) == 12 and all(c in "0123456789abcdef" for c in tail):
+        return StrategyId(head)
+    return EXTERNAL_STRATEGY_ID
 
 
 class OMSEngine:
@@ -326,7 +350,9 @@ class OMSEngine:
         """Match-or-replace reconciliation for non-sliced legs.
 
         Considers only plain resting orders (``parent_leg_id is None``) so it
-        never cancels a slice child as 'stale'.
+        never cancels a slice child as 'stale'. Scoped to ``signal.strategy_id``,
+        which also means adopted EXTERNAL orders (and other strategies' orders)
+        are never touched here — a strategy only reconciles what it owns.
         """
         sid = signal.strategy_id
         iid = signal.instrument.instrument_id
@@ -572,6 +598,75 @@ class OMSEngine:
             order.transition_to(OrderStatus.REJECTED, at_ns=self._clock.now_ns())
             order.reject_reason = "dropped: bus backpressure on orders topic"
 
+    # --- Adoption of pre-existing venue state ----------------------------
+
+    async def adopt_order(
+        self,
+        *,
+        instrument: Instrument,
+        client_order_id: ClientOrderId,
+        side: Side,
+        order_type: OrderType,
+        quantity: Quantity,
+        cumulative_filled: Quantity,
+        price: Price | None,
+        time_in_force: TimeInForce,
+        exchange_order_id: ExchangeOrderId | None = None,
+        created_at_ns: int | None = None,
+    ) -> OrderId:
+        """Adopt an order that already exists on the venue.
+
+        Used at startup (and during periodic resync) to recover orders the
+        venue reports that this process did not place — e.g. orders left
+        resting across a restart, or placed by a human. The order is seeded
+        in the ACKNOWLEDGED/PARTIALLY_FILLED state (it is already live) and
+        attributed to its owning strategy via the client_order_id, falling
+        back to EXTERNAL. It carries no parent_leg_id — adopted orders are
+        plain resting orders; we cannot reconstruct algo ownership.
+
+        Idempotent on client_order_id: re-adopting an order we already track
+        returns the existing OrderId without creating a duplicate.
+        """
+        existing = self._coid_to_order_id.get(client_order_id)
+        if existing is not None:
+            return existing
+
+        strategy_id = strategy_id_from_client_order_id(str(client_order_id))
+        order_id = OrderId(uuid4())
+        status = (
+            OrderStatus.PARTIALLY_FILLED
+            if cumulative_filled > 0
+            else OrderStatus.ACKNOWLEDGED
+        )
+        order = Order(
+            order_id=order_id,
+            client_order_id=client_order_id,
+            strategy_id=strategy_id,
+            instrument=instrument,
+            side=side,
+            order_type=order_type,
+            quantity=quantity,
+            price=price,
+            time_in_force=time_in_force,
+            created_at_ns=created_at_ns if created_at_ns is not None else self._clock.now_ns(),
+            parent_leg_id=None,
+        )
+        # Seed lifecycle state directly — the order is already live on the
+        # venue, so we bypass the PENDING_NEW → ACK transition path.
+        order.status = status
+        order.cumulative_filled = cumulative_filled
+        order.exchange_order_id = exchange_order_id
+        self._orders[order_id] = order
+        self._coid_to_order_id[client_order_id] = order_id
+        _log.info(
+            "adopted_order",
+            order_id=str(order_id), client_order_id=str(client_order_id),
+            strategy_id=strategy_id, side=side.value, status=status.value,
+            instrument=instrument.symbol,
+        )
+        await self._publish_open_orders()
+        return order_id
+
     async def cancel_order(self, order_id: OrderId) -> None:
         """Send a CancelRequest for a single order."""
         order = self._orders.get(order_id)
@@ -638,6 +733,26 @@ class OMSEngine:
             for (sid, _iid), slot in agg.items()
         )
 
+    def open_order_details(self) -> tuple[OpenOrderDetail, ...]:
+        """Per-order detail for every currently-resting order. For display."""
+        return tuple(
+            OpenOrderDetail(
+                order_id=str(o.order_id),
+                client_order_id=str(o.client_order_id),
+                strategy_id=o.strategy_id,
+                instrument=o.instrument,
+                side=o.side,
+                order_type=o.order_type,
+                quantity=o.quantity,
+                leaves_quantity=o.leaves_quantity,
+                price=o.price,
+                status=o.status,
+                created_at_ns=o.created_at_ns,
+            )
+            for o in self._orders.values()
+            if not o.is_terminal
+        )
+
     def strategy_id_for_client_order(
         self, coid: ClientOrderId
     ) -> StrategyId | None:
@@ -693,6 +808,7 @@ class OMSEngine:
                 ts_ingest=self._clock.now_ns(),
                 source=self._source,
                 exposures=self.working_exposures(),
+                orders=self.open_order_details(),
             ),
         )
 
@@ -708,4 +824,4 @@ class OMSEngine:
             self._signal_cache.pop(eid, None)
 
 
-__all__ = ["OMSEngine"]
+__all__ = ["OMSEngine", "EXTERNAL_STRATEGY_ID", "strategy_id_from_client_order_id"]

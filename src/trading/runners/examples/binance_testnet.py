@@ -49,6 +49,7 @@ from trading.order_gateways.binance import (
     BinanceRESTClient,
     BinanceUserDataStream,
     ListenKeyManager,
+    StateBootstrapper,
     SymbolMapper,
 )
 from trading.order_gateways.binance import stream_names
@@ -166,6 +167,14 @@ async def _amain() -> int:
         mismatch_threshold=Decimal("0.00001"),
     )
 
+    # --- State bootstrap ----------------------------------------------
+    # Adopts venue orders/positions at startup (recover mid-trade across a
+    # restart) and reconciles periodically to repair user-data-stream gaps.
+    state_bootstrap = StateBootstrapper(
+        bus=bus, clock=clock, config=config, rest=rest,
+        oms=oms, symbols=symbols, tracked_instruments=instruments,
+    )
+
     # --- Dashboard ----------------------------------------------------
     # Pass position_engine so the REST /state/positions endpoint can read
     # live state directly from the engine (no event-bus replay needed).
@@ -200,6 +209,10 @@ async def _amain() -> int:
     if dashboard is not None:
         await dashboard.start()
     await reconciler.start()
+    # Adopt venue state once the bus is running and all consumers (risk,
+    # position, dashboard) are subscribed, but before market data drives
+    # strategies — so a strategy's first tick sees the recovered state.
+    await state_bootstrap.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="binance-feed-handler")
 
     # --- Shutdown handling --------------------------------------------
@@ -228,6 +241,7 @@ async def _amain() -> int:
             await asyncio.wait_for(feed_task, timeout=5)
         except (asyncio.TimeoutError, Exception):
             pass
+        await state_bootstrap.stop()
         await reconciler.stop()
         await user_data.stop()
         await listen_keys.stop()

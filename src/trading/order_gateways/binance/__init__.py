@@ -8,6 +8,7 @@ from .listen_key import ListenKeyManager
 from .public_ws import BinancePublicWSConnector
 from .reconciler import BalanceReconciler
 from .rest_client import BinanceRESTClient
+from .state_bootstrap import StateBootstrapper
 from .symbols import SymbolMapper
 from .user_data import BinanceUserDataStream
 
@@ -22,6 +23,7 @@ __all__ = [
     "BinanceUserDataStream",
     "DepthBookManager",
     "ListenKeyManager",
+    "StateBootstrapper",
     "SymbolMapper",
     "translate_error",
 ]

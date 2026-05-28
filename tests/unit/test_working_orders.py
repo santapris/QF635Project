@@ -117,6 +117,12 @@ async def test_oms_publishes_open_orders_snapshot(clock, btc, strategy_id) -> No
     assert len(snaps) >= 1
     last = snaps[-1]
     assert any(x.working_buy == Decimal("0.1") for x in last.exposures)
+    # Snapshot also carries per-order detail for the dashboard.
+    assert len(last.orders) == 1
+    detail = last.orders[0]
+    assert detail.side is Side.BUY
+    assert detail.leaves_quantity == Decimal("0.1")
+    assert detail.instrument.symbol == btc.symbol
 
 
 # ---------------------------------------------------------------------------

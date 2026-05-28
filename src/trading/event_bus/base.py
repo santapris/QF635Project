@@ -39,6 +39,7 @@ class Topic:
     OPEN_ORDERS: Final[str] = "open-orders"
     FILLS: Final[str] = "fills"
     POSITIONS: Final[str] = "positions"
+    VENUE_POSITIONS: Final[str] = "venue-positions"
     ACCOUNT: Final[str] = "account"
     ALERTS: Final[str] = "alerts"
 

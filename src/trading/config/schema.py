@@ -112,6 +112,10 @@ class OMSSpec(BaseModel):
     # the strategies' execution horizon — tighter for fast TWAPs, looser for
     # slow unwinds.
     algo_driver_interval_seconds: float = 0.1
+    # If True, cancel ALL pre-existing venue orders at startup. Default False
+    # because the policy is to *adopt* pre-existing state (recover mid-trade),
+    # not wipe it. Only enable for environments that must start from flat.
+    cancel_stale_orders_on_start: bool = False
 
 
 class PositionSpec(BaseModel):

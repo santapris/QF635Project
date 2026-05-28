@@ -14,6 +14,7 @@ from .events import (
     OrderAcknowledged,
     OrderBookEvent,
     OrderBookLevel,
+    OpenOrderDetail,
     OpenOrdersSnapshotEvent,
     OrderCancelled,
     OrderLeg,
@@ -28,6 +29,8 @@ from .events import (
     SignalEvent,
     TickEvent,
     TradeEvent,
+    VenuePosition,
+    VenuePositionSnapshotEvent,
 )
 from .exceptions import (
     BackpressureError,
@@ -114,6 +117,7 @@ __all__ = [
     "FillEvent",
     "FundingRateEvent",
     "KillSwitchEvent",
+    "OpenOrderDetail",
     "OpenOrdersSnapshotEvent",
     "OrderAcknowledged",
     "OrderBookEvent",
@@ -130,6 +134,8 @@ __all__ = [
     "SignalEvent",
     "TickEvent",
     "TradeEvent",
+    "VenuePosition",
+    "VenuePositionSnapshotEvent",
     "WorkingExposure",
     # exceptions
     "BackpressureError",

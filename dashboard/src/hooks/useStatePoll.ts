@@ -33,6 +33,13 @@ interface PositionsResponse {
     unrealized_pnl: string;
     mark_price: string;
   }>;
+  venue_net: Array<{
+    instrument: string;
+    net_quantity: string;
+    entry_price: string;
+    mark_price: string;
+    unrealized_pnl: string;
+  }>;
 }
 
 interface AccountResponse {
@@ -48,6 +55,19 @@ interface OpenOrdersResponse {
     working_buy: string;
     working_sell: string;
     open_order_count: number;
+  }>;
+  orders: Array<{
+    order_id: string;
+    client_order_id: string;
+    strategy_id: string;
+    instrument: string;
+    side: string;
+    order_type: string;
+    quantity: string;
+    leaves_quantity: string;
+    price: string | null;
+    status: string;
+    created_at_ns: number;
   }>;
 }
 
@@ -74,17 +94,27 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       if (data && !ctrl.signal.aborted) {
         dispatch({
           type: "POSITIONS_SNAPSHOT",
-          payload: data.positions.map((p) => ({
-            id: `${p.strategy_id}:${p.instrument}`,
-            ts: Date.parse(data.timestamp) || Date.now(),
-            strategy_id: p.strategy_id,
-            instrument: p.instrument,
-            quantity: p.quantity,
-            average_entry_price: p.average_entry_price,
-            unrealized_pnl: p.unrealized_pnl,
-            realized_pnl: p.realized_pnl,
-            mark_price: p.mark_price,
-          })),
+          payload: {
+            positions: data.positions.map((p) => ({
+              id: `${p.strategy_id}:${p.instrument}`,
+              ts: Date.parse(data.timestamp) || Date.now(),
+              strategy_id: p.strategy_id,
+              instrument: p.instrument,
+              quantity: p.quantity,
+              average_entry_price: p.average_entry_price,
+              unrealized_pnl: p.unrealized_pnl,
+              realized_pnl: p.realized_pnl,
+              mark_price: p.mark_price,
+            })),
+            venueNet: (data.venue_net ?? []).map((v) => ({
+              id: v.instrument,
+              instrument: v.instrument,
+              net_quantity: v.net_quantity,
+              entry_price: v.entry_price,
+              mark_price: v.mark_price,
+              unrealized_pnl: v.unrealized_pnl,
+            })),
+          },
         });
       }
       if (!ctrl.signal.aborted) {
@@ -113,14 +143,29 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       if (data && !ctrl.signal.aborted) {
         dispatch({
           type: "OPEN_ORDERS_SNAPSHOT",
-          payload: data.exposures.map((e) => ({
-            id: `${e.strategy_id}:${e.instrument}`,
-            strategy_id: e.strategy_id,
-            instrument: e.instrument,
-            working_buy: e.working_buy,
-            working_sell: e.working_sell,
-            open_order_count: e.open_order_count,
-          })),
+          payload: {
+            exposures: data.exposures.map((e) => ({
+              id: `${e.strategy_id}:${e.instrument}`,
+              strategy_id: e.strategy_id,
+              instrument: e.instrument,
+              working_buy: e.working_buy,
+              working_sell: e.working_sell,
+              open_order_count: e.open_order_count,
+            })),
+            orders: data.orders.map((o) => ({
+              id: o.order_id,
+              ts: o.created_at_ns / 1_000_000,  // ns -> ms
+              order_id: o.order_id,
+              strategy_id: o.strategy_id,
+              instrument: o.instrument,
+              side: o.side,
+              order_type: o.order_type,
+              quantity: o.quantity,
+              leaves_quantity: o.leaves_quantity,
+              price: o.price,
+              status: o.status,
+            })),
+          },
         });
       }
       if (!ctrl.signal.aborted) {

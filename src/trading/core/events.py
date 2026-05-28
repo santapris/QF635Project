@@ -445,6 +445,34 @@ class AccountSnapshotEvent(BaseEvent):
     balances: tuple[AccountBalance, ...]
 
 
+class VenuePosition(BaseModel):
+    """Exchange-reported net position for one instrument — ground truth.
+
+    Distinct from the per-strategy books the PositionEngine derives from
+    fills. The venue knows only the net across everything (all our
+    strategies, plus any external/manual trading), so this is the number
+    directly comparable to what the exchange UI shows.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instrument: Instrument
+    net_quantity: Quantity
+    """Signed: +long, -short."""
+    entry_price: Price
+    mark_price: Price
+    unrealized_pnl: Price
+
+
+class VenuePositionSnapshotEvent(BaseEvent):
+    """Exchange-reported net positions. Published by the venue gateway's
+    state reconciler on a poll of the position endpoint. Snapshot semantics:
+    replace wholesale; an instrument absent here is flat on the venue."""
+
+    event_type: Literal["venue_position_snapshot"] = "venue_position_snapshot"
+    positions: tuple[VenuePosition, ...] = ()
+
+
 class WorkingExposure(BaseModel):
     """Open-order (not yet filled) exposure for one (strategy, instrument).
 
@@ -465,17 +493,45 @@ class WorkingExposure(BaseModel):
     open_order_count: int
 
 
+class OpenOrderDetail(BaseModel):
+    """One currently-resting (non-terminal) order, for display/audit.
+
+    Distinct from :class:`WorkingExposure`, which is the per-side aggregate
+    risk reasons about. This is the individual-order view an operator sees.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    order_id: str
+    client_order_id: str
+    strategy_id: StrategyId
+    instrument: Instrument
+    side: Side
+    order_type: OrderType
+    quantity: Quantity
+    leaves_quantity: Quantity
+    price: Price | None = None
+    status: OrderStatus
+    created_at_ns: Timestamp
+
+
 class OpenOrdersSnapshotEvent(BaseEvent):
     """The OMS's working-order state-of-the-world.
 
     Published by the OMS whenever the open-order set changes (place, ack,
-    reject, cancel, fill). Snapshot semantics — replace wholesale; a key
-    absent from ``exposures`` has no working orders. A dropped snapshot
+    reject, cancel, fill). Snapshot semantics — replace wholesale; anything
+    absent from this snapshot is no longer open. A dropped snapshot
     self-heals on the next one. Mirrors AccountSnapshotEvent / PnLSnapshotEvent.
+
+    Carries two views of the same state:
+    - ``exposures``: per-(strategy, instrument) aggregate, side-separated.
+      What the risk engine consumes.
+    - ``orders``: every individual resting order. What the dashboard shows.
     """
 
     event_type: Literal["open_orders_snapshot"] = "open_orders_snapshot"
     exposures: tuple[WorkingExposure, ...] = ()
+    orders: tuple[OpenOrderDetail, ...] = ()
 
 
 # --- Discriminated union ---------------------------------------------------
@@ -504,6 +560,7 @@ Event = Annotated[
         PnLSnapshotEvent,
         AccountSnapshotEvent,
         OpenOrdersSnapshotEvent,
+        VenuePositionSnapshotEvent,
     ],
     Field(discriminator="event_type"),
 ]
@@ -526,6 +583,7 @@ __all__ = [
     "OrderBookLevel",
     "OrderCancelled",
     "OrderRejected",
+    "OpenOrderDetail",
     "OpenOrdersSnapshotEvent",
     "OrderLeg",
     "OrderRequest",
@@ -538,4 +596,6 @@ __all__ = [
     "SignalEvent",
     "TickEvent",
     "TradeEvent",
+    "VenuePosition",
+    "VenuePositionSnapshotEvent",
 ]

@@ -52,7 +52,12 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from ..core.events import AccountSnapshotEvent, BaseEvent, OpenOrdersSnapshotEvent
+from ..core.events import (
+    AccountSnapshotEvent,
+    BaseEvent,
+    OpenOrdersSnapshotEvent,
+    VenuePositionSnapshotEvent,
+)
 from ..event_bus.base import AbstractEventBus, Topic
 
 if TYPE_CHECKING:
@@ -174,6 +179,9 @@ class DashboardServer:
         # Latest OMS working-order snapshot, cached for the REST endpoint
         # (same atomic-attribute pattern as _latest_account).
         self._latest_open_orders: OpenOrdersSnapshotEvent | None = None
+        # Latest exchange-reported net positions (ground truth, for the
+        # 'net' row shown alongside per-strategy positions).
+        self._latest_venue_positions: VenuePositionSnapshotEvent | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -197,6 +205,7 @@ class DashboardServer:
         # snapshots in memory for the REST endpoints — not broadcast on the WS.
         await self._bus.subscribe(Topic.ACCOUNT, self._on_account_event)
         await self._bus.subscribe(Topic.OPEN_ORDERS, self._on_open_orders_event)
+        await self._bus.subscribe(Topic.VENUE_POSITIONS, self._on_venue_positions_event)
 
         # Inject structlog forwarder.
         self._inject_structlog_processor()
@@ -257,7 +266,21 @@ class DashboardServer:
                     "unrealized_pnl": str(position.unrealized_pnl),
                     "mark_price": str(position.mark_price),
                 })
-        return {"timestamp": _now_iso(), "positions": positions}
+        # Venue net positions: ground truth from the exchange, shown as the
+        # 'net' row. Comparable to the exchange UI; the per-strategy rows
+        # above are our fill-derived attribution and need not match individually.
+        venue: list[dict[str, Any]] = []
+        snap = self._latest_venue_positions
+        if snap is not None:
+            for vp in snap.positions:
+                venue.append({
+                    "instrument": vp.instrument.symbol,
+                    "net_quantity": str(vp.net_quantity),
+                    "entry_price": str(vp.entry_price),
+                    "mark_price": str(vp.mark_price),
+                    "unrealized_pnl": str(vp.unrealized_pnl),
+                })
+        return {"timestamp": _now_iso(), "positions": positions, "venue_net": venue}
 
     def _account_payload(self) -> dict[str, Any]:
         snap = self._latest_account
@@ -274,7 +297,7 @@ class DashboardServer:
     def _open_orders_payload(self) -> dict[str, Any]:
         snap = self._latest_open_orders
         if snap is None:
-            return {"timestamp": _now_iso(), "exposures": []}
+            return {"timestamp": _now_iso(), "exposures": [], "orders": []}
         return {
             "timestamp": _now_iso(),
             "exposures": [
@@ -286,6 +309,22 @@ class DashboardServer:
                     "open_order_count": e.open_order_count,
                 }
                 for e in snap.exposures
+            ],
+            "orders": [
+                {
+                    "order_id": o.order_id,
+                    "client_order_id": o.client_order_id,
+                    "strategy_id": str(o.strategy_id),
+                    "instrument": o.instrument.symbol,
+                    "side": o.side.value,
+                    "order_type": o.order_type.value,
+                    "quantity": str(o.quantity),
+                    "leaves_quantity": str(o.leaves_quantity),
+                    "price": None if o.price is None else str(o.price),
+                    "status": o.status.value,
+                    "created_at_ns": o.created_at_ns,
+                }
+                for o in snap.orders
             ],
         }
 
@@ -366,6 +405,10 @@ class DashboardServer:
     async def _on_open_orders_event(self, event: BaseEvent) -> None:
         if isinstance(event, OpenOrdersSnapshotEvent):
             self._latest_open_orders = event
+
+    async def _on_venue_positions_event(self, event: BaseEvent) -> None:
+        if isinstance(event, VenuePositionSnapshotEvent):
+            self._latest_venue_positions = event
 
     async def _broadcast_loop(self) -> None:
         """Drain the broadcast queue and send to all connected clients."""

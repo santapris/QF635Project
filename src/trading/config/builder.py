@@ -143,6 +143,9 @@ class LiveApp:
     extra_services: list = field(default_factory=list)
     health_server: HealthServer | None = None
     dashboard_server: DashboardServer | None = None
+    # Policy: adopt pre-existing venue orders at startup rather than wiping
+    # them. Only cancel-on-start when explicitly configured (start-from-flat).
+    cancel_stale_orders_on_start: bool = False
 
     async def start(self) -> None:
         await self.position_engine.start()
@@ -150,12 +153,13 @@ class LiveApp:
         await self.oms_engine.start()
         for gw in self.order_gateways:
             await gw.start()
-            cancelled = await gw.cancel_stale_orders()
-            if cancelled:
-                _log.warning(
-                    "startup_cancelled_stale_orders",
-                    num_cancelled=cancelled, venue=gw.venue,
-                )
+            if self.cancel_stale_orders_on_start:
+                cancelled = await gw.cancel_stale_orders()
+                if cancelled:
+                    _log.warning(
+                        "startup_cancelled_stale_orders",
+                        num_cancelled=cancelled, venue=gw.venue,
+                    )
         for svc in self.extra_services:
             await svc.start()
         await self.strategy_registry.start()
@@ -238,6 +242,7 @@ def build_live_app(config: AppConfig) -> LiveApp:
         position_engine=pos, risk_engine=risk, oms_engine=oms,
         strategy_registry=registry, order_gateways=order_gateways,
         extra_services=extra_services,
+        cancel_stale_orders_on_start=config.oms.cancel_stale_orders_on_start,
     )
 
 
