@@ -85,6 +85,15 @@ export interface RoutingRow {
   reason: string;
 }
 
+export interface WorkingExposureRow {
+  id: string;          // `${strategy_id}:${instrument}`
+  strategy_id: string;
+  instrument: string;
+  working_buy: string;
+  working_sell: string;
+  open_order_count: number;
+}
+
 export interface PositionRow {
   id: string;
   strategy_id: string;
@@ -133,6 +142,7 @@ export interface PipelineState {
   orders: OrderRow[];                       // rolling 100
   fills: FillRow[];                         // rolling 100
   routings: RoutingRow[];                   // rolling 100 — OMS execution-routing decisions
+  openExposures: WorkingExposureRow[];      // working-order exposure per (strategy, instrument)
   positions: Record<string, PositionRow>;   // instrument -> latest position
   pnlHistory: PnlPoint[];                   // time-series for chart, rolling 500
   account: AccountSnapshot | null;          // latest exchange account snapshot
@@ -150,6 +160,7 @@ export const initialState: PipelineState = {
   orders: [],
   fills: [],
   routings: [],
+  openExposures: [],
   positions: {},
   pnlHistory: [],
   account: null,
@@ -166,6 +177,7 @@ export type PipelineAction =
   | { type: "ORDER"; payload: OrderRow }
   | { type: "FILL"; payload: FillRow }
   | { type: "ROUTING"; payload: RoutingRow }
+  | { type: "OPEN_ORDERS_SNAPSHOT"; payload: WorkingExposureRow[] }
   | { type: "POSITIONS_SNAPSHOT"; payload: PositionRow[] }
   | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
@@ -236,6 +248,12 @@ export function pipelineReducer(
 
     case "ROUTING": {
       return { ...state, routings: cap(state.routings, action.payload, 100) };
+    }
+
+    case "OPEN_ORDERS_SNAPSHOT": {
+      // Replace wholesale — snapshot semantics. A (strategy, instrument)
+      // absent from the new snapshot has no working orders and drops off.
+      return { ...state, openExposures: action.payload };
     }
 
     case "POSITIONS_SNAPSHOT": {

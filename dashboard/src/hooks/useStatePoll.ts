@@ -18,8 +18,9 @@ import { PipelineAction } from "../store/pipelineStore";
 // different host/port without rebuilding. Falls back to localhost for dev.
 const HTTP_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8765";
 
-const POSITIONS_INTERVAL_MS = 2_000;
-const ACCOUNT_INTERVAL_MS   = 5_000;
+const POSITIONS_INTERVAL_MS   = 2_000;
+const ACCOUNT_INTERVAL_MS     = 5_000;
+const OPEN_ORDERS_INTERVAL_MS = 2_000;
 
 interface PositionsResponse {
   timestamp: string;
@@ -39,6 +40,17 @@ interface AccountResponse {
   balances: Array<{ asset: string; free: string; locked: string }>;
 }
 
+interface OpenOrdersResponse {
+  timestamp: string;
+  exposures: Array<{
+    strategy_id: string;
+    instrument: string;
+    working_buy: string;
+    working_sell: string;
+    open_order_count: number;
+  }>;
+}
+
 async function fetchJSON<T>(path: string, signal: AbortSignal): Promise<T | null> {
   try {
     const res = await fetch(`${HTTP_BASE}${path}`, { signal });
@@ -53,8 +65,9 @@ async function fetchJSON<T>(path: string, signal: AbortSignal): Promise<T | null
 export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
   useEffect(() => {
     const ctrl = new AbortController();
-    let positionsTimer: ReturnType<typeof setTimeout> | null = null;
-    let accountTimer:   ReturnType<typeof setTimeout> | null = null;
+    let positionsTimer:  ReturnType<typeof setTimeout> | null = null;
+    let accountTimer:    ReturnType<typeof setTimeout> | null = null;
+    let openOrdersTimer: ReturnType<typeof setTimeout> | null = null;
 
     const tickPositions = async () => {
       const data = await fetchJSON<PositionsResponse>("/state/positions", ctrl.signal);
@@ -95,14 +108,36 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       }
     };
 
-    // Kick both polls immediately so the panels populate on first paint.
+    const tickOpenOrders = async () => {
+      const data = await fetchJSON<OpenOrdersResponse>("/state/open_orders", ctrl.signal);
+      if (data && !ctrl.signal.aborted) {
+        dispatch({
+          type: "OPEN_ORDERS_SNAPSHOT",
+          payload: data.exposures.map((e) => ({
+            id: `${e.strategy_id}:${e.instrument}`,
+            strategy_id: e.strategy_id,
+            instrument: e.instrument,
+            working_buy: e.working_buy,
+            working_sell: e.working_sell,
+            open_order_count: e.open_order_count,
+          })),
+        });
+      }
+      if (!ctrl.signal.aborted) {
+        openOrdersTimer = setTimeout(tickOpenOrders, OPEN_ORDERS_INTERVAL_MS);
+      }
+    };
+
+    // Kick all polls immediately so the panels populate on first paint.
     tickPositions();
     tickAccount();
+    tickOpenOrders();
 
     return () => {
       ctrl.abort();
-      if (positionsTimer) clearTimeout(positionsTimer);
-      if (accountTimer)   clearTimeout(accountTimer);
+      if (positionsTimer)  clearTimeout(positionsTimer);
+      if (accountTimer)    clearTimeout(accountTimer);
+      if (openOrdersTimer) clearTimeout(openOrdersTimer);
     };
   }, [dispatch]);
 }

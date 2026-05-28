@@ -40,6 +40,7 @@ from ..core.events import (
     EventId,
     ExecutionRoutedEvent,
     FillEvent,
+    OpenOrdersSnapshotEvent,
     OrderAcknowledged,
     OrderCancelled,
     OrderLeg,
@@ -48,15 +49,20 @@ from ..core.events import (
     RiskDecision,
     SignalEvent,
     TickEvent,
+    WorkingExposure,
 )
 from ..core.exceptions import BackpressureError, InvalidStateTransitionError, OrderNotFoundError
+from ..core.instruments import Instrument
 from ..core.types import (
     ClientOrderId,
     OrderId,
     OrderStatus,
     Price,
+    Quantity,
+    Side,
     StrategyId,
 )
+from decimal import Decimal
 from ..event_bus.base import AbstractEventBus, Topic
 from .execution_algos import ChildOrderSpec, ExecutionAlgo
 from .order import Order
@@ -202,9 +208,13 @@ class OMSEngine:
             await self._handle_ack(event)
         elif isinstance(event, OrderRejected):
             await self._handle_reject(event)
+            await self._publish_open_orders()  # reject removes working exposure
         elif isinstance(event, OrderCancelled):
             await self._handle_cancel(event)
-        # OrderRequest / CancelRequest / AmendRequest: our own messages;
+            await self._publish_open_orders()  # cancel removes working exposure
+        # An ack doesn't change leaves (PENDING_NEW already counted), so no
+        # republish there. OrderRequest / CancelRequest / AmendRequest are our
+        # own echoes — ignored.
         # ignore.
 
     async def _on_market_data(self, event: BaseEvent) -> None:
@@ -236,6 +246,8 @@ class OMSEngine:
                     _log.exception("algo_on_fill_raised", leg_id=leg_id)
                 if algo.is_done() and not self._leg_has_live_children(leg_id):
                     self._retire_algo(leg_id)
+        # A fill reduces leaves (and may terminalize the order) — exposure changed.
+        await self._publish_open_orders()
 
     # --- OrderGateway-response branches ----------------------------------------
 
@@ -304,6 +316,9 @@ class OMSEngine:
 
         await self._reconcile_immediate(signal, immediate_legs)
         await self._reconcile_sliced(signal, sliced_legs)
+        # One snapshot after the whole reconcile — covers every place/cancel
+        # above without emitting a burst of intermediate snapshots.
+        await self._publish_open_orders()
 
     async def _reconcile_immediate(
         self, signal: SignalEvent, legs: list[OrderLeg]
@@ -414,6 +429,10 @@ class OMSEngine:
             return
         if spec is not None:
             await self._submit_child(leg_id, spec)
+            # A new slice was placed from the timer path (outside reconcile),
+            # so emit a snapshot here; reconcile-time kicks are covered by
+            # _reconcile_quotes' own trailing snapshot.
+            await self._publish_open_orders()
         if algo.is_done() and not self._leg_has_live_children(leg_id):
             self._retire_algo(leg_id)
 
@@ -584,6 +603,41 @@ class OMSEngine:
     def open_orders(self) -> Iterable[Order]:
         return (o for o in self._orders.values() if not o.is_terminal)
 
+    def working_exposures(self) -> tuple[WorkingExposure, ...]:
+        """Aggregate leaves_quantity of open orders per (strategy, instrument).
+
+        Buy and sell are kept separate so consumers can reason about the
+        worst case on each side. PENDING_NEW (placed, not yet acked) orders
+        count — a fill can arrive before the ack, so they are real exposure.
+        """
+        agg: dict[tuple[StrategyId, str], dict] = {}
+        for o in self._orders.values():
+            if o.is_terminal:
+                continue
+            key = (o.strategy_id, o.instrument.instrument_id)
+            slot = agg.get(key)
+            if slot is None:
+                slot = {
+                    "buy": Decimal(0), "sell": Decimal(0),
+                    "count": 0, "instrument": o.instrument,
+                }
+                agg[key] = slot
+            if o.side is Side.BUY:
+                slot["buy"] += o.leaves_quantity
+            else:
+                slot["sell"] += o.leaves_quantity
+            slot["count"] += 1
+        return tuple(
+            WorkingExposure(
+                strategy_id=sid,
+                instrument=slot["instrument"],
+                working_buy=Quantity(slot["buy"]),
+                working_sell=Quantity(slot["sell"]),
+                open_order_count=slot["count"],
+            )
+            for (sid, _iid), slot in agg.items()
+        )
+
     def strategy_id_for_client_order(
         self, coid: ClientOrderId
     ) -> StrategyId | None:
@@ -625,6 +679,22 @@ class OMSEngine:
                 event_type=type(event).__name__,
             )
             return False
+
+    async def _publish_open_orders(self) -> None:
+        """Publish a working-order snapshot. Called after any change to the
+        open-order set so risk and the dashboard track effective exposure.
+
+        Snapshot semantics: a dropped publish self-heals on the next change.
+        """
+        await self._safe_publish(
+            Topic.OPEN_ORDERS,
+            OpenOrdersSnapshotEvent(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source=self._source,
+                exposures=self.working_exposures(),
+            ),
+        )
 
     def _evict_stale_signals(self) -> None:
         cutoff = self._clock.now_ns() - self._signal_ttl_ns

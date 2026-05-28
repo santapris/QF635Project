@@ -445,6 +445,39 @@ class AccountSnapshotEvent(BaseEvent):
     balances: tuple[AccountBalance, ...]
 
 
+class WorkingExposure(BaseModel):
+    """Open-order (not yet filled) exposure for one (strategy, instrument).
+
+    Buy and sell are kept *separate* rather than netted: a flat position
+    with a working buy and a working sell is not flat exposure — either
+    fill moves you off zero. Consumers (risk) need the worst case per
+    side, which netting would hide.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_id: StrategyId
+    instrument: Instrument
+    working_buy: Quantity
+    """Sum of leaves_quantity across open BUY orders."""
+    working_sell: Quantity
+    """Sum of leaves_quantity across open SELL orders."""
+    open_order_count: int
+
+
+class OpenOrdersSnapshotEvent(BaseEvent):
+    """The OMS's working-order state-of-the-world.
+
+    Published by the OMS whenever the open-order set changes (place, ack,
+    reject, cancel, fill). Snapshot semantics — replace wholesale; a key
+    absent from ``exposures`` has no working orders. A dropped snapshot
+    self-heals on the next one. Mirrors AccountSnapshotEvent / PnLSnapshotEvent.
+    """
+
+    event_type: Literal["open_orders_snapshot"] = "open_orders_snapshot"
+    exposures: tuple[WorkingExposure, ...] = ()
+
+
 # --- Discriminated union ---------------------------------------------------
 # Use this when receiving events from a serialization layer (Kafka, etc.)
 # Pydantic will dispatch on ``event_type`` and instantiate the right class.
@@ -470,6 +503,7 @@ Event = Annotated[
         PositionUpdateEvent,
         PnLSnapshotEvent,
         AccountSnapshotEvent,
+        OpenOrdersSnapshotEvent,
     ],
     Field(discriminator="event_type"),
 ]
@@ -492,11 +526,13 @@ __all__ = [
     "OrderBookLevel",
     "OrderCancelled",
     "OrderRejected",
+    "OpenOrdersSnapshotEvent",
     "OrderLeg",
     "OrderRequest",
     "RejectedLeg",
     "PnLSnapshotEvent",
     "PositionUpdateEvent",
+    "WorkingExposure",
     "RiskAlertEvent",
     "RiskDecision",
     "SignalEvent",

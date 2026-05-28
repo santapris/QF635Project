@@ -4,11 +4,18 @@ Quotes both sides around the mid: a bid below and an ask above, with a
 spread set by ``target_spread_bps``. Quotes are skewed away from the
 side the strategy is already heavy on, so inventory mean-reverts.
 
-The simplification: this strategy emits *fresh* quotes on every tick.
-A real market maker would amend or cancel-replace existing quotes
-rather than firing new ones; that's an OMS concern. Here we model it
-as the strategy expressing its current desired quotes; the OMS in
-batch 7 will be responsible for not double-quoting.
+The strategy expresses its *current desired quotes* as a SignalEvent;
+it does not manage resting orders. The OMS reconciles those desired
+legs against what is already open — matching by (side, price, leaves)
+so unchanged quotes keep their queue position and only genuine changes
+cause a cancel-replace. So emitting the same quotes again is a no-op
+at the order level; the rate gates below exist to avoid bothering the
+risk/OMS pipeline with redundant signals, not to prevent double-quoting.
+
+These quotes are PASSIVE (the default leg intent), so the OMS places
+them in place and never slices them — quote-rate control here is purely
+a strategy decision about quote freshness, distinct from the OMS's
+execution-slicing cadence for NORMAL/URGENT legs.
 
 Inventory management:
 

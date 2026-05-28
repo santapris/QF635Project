@@ -43,6 +43,7 @@ from ..core.events import (
     BaseEvent,
     FillEvent,
     KillSwitchEvent,
+    OpenOrdersSnapshotEvent,
     PositionUpdateEvent,
     RejectedLeg,
     RiskAlertEvent,
@@ -114,6 +115,7 @@ class RiskEngine:
         await self._bus.subscribe(Topic.SIGNALS, self._on_signal)
         await self._bus.subscribe(Topic.FILLS, self._on_fill)
         await self._bus.subscribe(Topic.POSITIONS, self._on_position_update)
+        await self._bus.subscribe(Topic.OPEN_ORDERS, self._on_open_orders)
 
     async def stop(self) -> None:
         self._started = False
@@ -260,6 +262,10 @@ class RiskEngine:
     async def _on_position_update(self, event: BaseEvent) -> None:
         if isinstance(event, PositionUpdateEvent):
             self._state.apply_position_update(event)
+
+    async def _on_open_orders(self, event: BaseEvent) -> None:
+        if isinstance(event, OpenOrdersSnapshotEvent):
+            self._state.apply_open_orders_snapshot(event)
 
     # --- Helpers ----------------------------------------------------------
 

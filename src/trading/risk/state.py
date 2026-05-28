@@ -5,7 +5,11 @@ The single read model that every rule queries. Owned by the
 
 State tracked:
 
-- current position per (strategy, instrument)
+- current (confirmed) position per (strategy, instrument)
+- working-order exposure per (strategy, instrument): leaves on open orders
+  not yet filled, separated by side. Fed from the OMS's
+  OpenOrdersSnapshotEvent so position-limit rules see *effective* exposure
+  (confirmed + in-flight), not just confirmed fills.
 - realized PnL today, per strategy (resets on session rollover)
 - signal-emit timestamps per strategy (for throttle rules)
 
@@ -21,7 +25,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from ..core.clock import Clock
-from ..core.events import FillEvent, PositionUpdateEvent
+from ..core.events import FillEvent, OpenOrdersSnapshotEvent, PositionUpdateEvent
 from ..core.instruments import Instrument
 from ..core.types import Price, Quantity, StrategyId, Timestamp
 
@@ -42,6 +46,9 @@ class RiskState:
         self._throttle_window_ns = int(throttle_window_seconds * 1_000_000_000)
 
         self._positions: dict[tuple[StrategyId, str], Quantity] = {}
+        # Working-order exposure: (working_buy, working_sell) per key. Replaced
+        # wholesale on each OpenOrdersSnapshotEvent (snapshot semantics).
+        self._working: dict[tuple[StrategyId, str], tuple[Quantity, Quantity]] = {}
         self._daily_pnl: dict[StrategyId, _StrategyDailyPnL] = {}
         # One sliding window of recent signal timestamps per strategy.
         self._recent_signals: dict[StrategyId, deque[Timestamp]] = defaultdict(deque)
@@ -51,9 +58,28 @@ class RiskState:
     def get_position(
         self, strategy_id: StrategyId, instrument: Instrument
     ) -> Quantity:
-        """Signed position: +long, -short, 0 flat."""
+        """Signed confirmed position: +long, -short, 0 flat.
+
+        This is fills-only. For limit checks that must account for in-flight
+        orders, combine with :meth:`get_working`.
+        """
         return self._positions.get(
             (strategy_id, instrument.instrument_id), Quantity(Decimal(0))
+        )
+
+    def get_working(
+        self, strategy_id: StrategyId, instrument: Instrument
+    ) -> tuple[Quantity, Quantity]:
+        """Working-order exposure as ``(working_buy, working_sell)``.
+
+        Both are non-negative sums of ``leaves_quantity`` over open orders on
+        that side. Empty when the OMS has published no open orders for this
+        key. Note this lags signal evaluation by one in-flight signal — see
+        :meth:`apply_open_orders_snapshot`.
+        """
+        return self._working.get(
+            (strategy_id, instrument.instrument_id),
+            (Quantity(Decimal(0)), Quantity(Decimal(0))),
         )
 
     def get_realized_pnl_today(self, strategy_id: StrategyId) -> Price:
@@ -119,6 +145,26 @@ class RiskState:
             )
         else:
             bucket.realized_pnl = update.realized_pnl
+
+    def apply_open_orders_snapshot(self, snapshot: OpenOrdersSnapshotEvent) -> None:
+        """Replace working-order exposure from the OMS's snapshot.
+
+        Snapshot semantics: the new map fully replaces the old, so a key
+        absent from ``exposures`` correctly drops to zero working orders.
+
+        Lag note (option a): this snapshot arrives on a separate topic from
+        SIGNALS, so between the OMS placing an order and this update landing,
+        risk may evaluate one more signal against slightly-stale working
+        state. ``max_position`` is a backstop and tolerates one in-flight
+        signal of lag. TODO(risk-b): tighten by having the engine
+        optimistically self-increment working exposure on its own approval
+        before the OMS confirms — at the cost of re-coupling risk to order
+        placement. Revisit only if the one-signal lag proves exploitable.
+        """
+        self._working = {
+            (e.strategy_id, e.instrument.instrument_id): (e.working_buy, e.working_sell)
+            for e in snapshot.exposures
+        }
 
     def start_new_session(self) -> None:
         """Reset day-bucketed counters. Called by the engine at session rollover."""

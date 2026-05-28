@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from ..core.events import AccountSnapshotEvent, BaseEvent
+from ..core.events import AccountSnapshotEvent, BaseEvent, OpenOrdersSnapshotEvent
 from ..event_bus.base import AbstractEventBus, Topic
 
 if TYPE_CHECKING:
@@ -171,6 +171,9 @@ class DashboardServer:
         # uvicorn thread. Python dict and tuple assignment is atomic under
         # the GIL, so a plain attribute is sufficient — no lock needed.
         self._latest_account: AccountSnapshotEvent | None = None
+        # Latest OMS working-order snapshot, cached for the REST endpoint
+        # (same atomic-attribute pattern as _latest_account).
+        self._latest_open_orders: OpenOrdersSnapshotEvent | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -190,9 +193,10 @@ class DashboardServer:
         # Subscribe to streaming topics for the WS broadcast.
         for topic in _STREAM_TOPICS:
             await self._bus.subscribe(topic, self._on_stream_event_factory(topic))
-        # Also subscribe to ACCOUNT just to keep the latest snapshot in
-        # memory for the REST endpoint — not broadcast on the WS.
+        # Also subscribe to ACCOUNT and OPEN_ORDERS just to keep the latest
+        # snapshots in memory for the REST endpoints — not broadcast on the WS.
         await self._bus.subscribe(Topic.ACCOUNT, self._on_account_event)
+        await self._bus.subscribe(Topic.OPEN_ORDERS, self._on_open_orders_event)
 
         # Inject structlog forwarder.
         self._inject_structlog_processor()
@@ -267,6 +271,24 @@ class DashboardServer:
             ],
         }
 
+    def _open_orders_payload(self) -> dict[str, Any]:
+        snap = self._latest_open_orders
+        if snap is None:
+            return {"timestamp": _now_iso(), "exposures": []}
+        return {
+            "timestamp": _now_iso(),
+            "exposures": [
+                {
+                    "strategy_id": str(e.strategy_id),
+                    "instrument": e.instrument.symbol,
+                    "working_buy": str(e.working_buy),
+                    "working_sell": str(e.working_sell),
+                    "open_order_count": e.open_order_count,
+                }
+                for e in snap.exposures
+            ],
+        }
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -287,6 +309,9 @@ class DashboardServer:
 
         async def account_endpoint(request: Request) -> JSONResponse:
             return JSONResponse(self._account_payload())
+
+        async def open_orders_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._open_orders_payload())
 
         async def websocket_endpoint(ws: WebSocket) -> None:
             await ws.accept()
@@ -319,6 +344,7 @@ class DashboardServer:
             routes=[
                 Route("/state/positions", positions_endpoint, methods=["GET"]),
                 Route("/state/account", account_endpoint, methods=["GET"]),
+                Route("/state/open_orders", open_orders_endpoint, methods=["GET"]),
                 WebSocketRoute("/ws", websocket_endpoint),
             ],
             middleware=middleware,
@@ -336,6 +362,10 @@ class DashboardServer:
     async def _on_account_event(self, event: BaseEvent) -> None:
         if isinstance(event, AccountSnapshotEvent):
             self._latest_account = event
+
+    async def _on_open_orders_event(self, event: BaseEvent) -> None:
+        if isinstance(event, OpenOrdersSnapshotEvent):
+            self._latest_open_orders = event
 
     async def _broadcast_loop(self) -> None:
         """Drain the broadcast queue and send to all connected clients."""

@@ -8,6 +8,13 @@ would extend an already-capped position) does the rule reject.
 Clamping is the right default for a position cap. Rejecting outright
 turns a strategy that would have placed *some* business into one that
 placed none, which is rarely what an operator wants.
+
+Headroom is computed against *effective* exposure — confirmed position
+plus working (unfilled) orders on the same side — not confirmed position
+alone. Without this, a strategy could get N orders each individually
+approved that together blow past the cap if they all fill, because each
+evaluation only saw the confirmed fills at that instant. Working-order
+exposure comes from the OMS via OpenOrdersSnapshotEvent (see RiskState).
 """
 
 from __future__ import annotations
@@ -43,20 +50,25 @@ class MaxPositionRule(AbstractRiskRule):
 
     def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
         current = state.get_position(signal.strategy_id, signal.instrument)
+        working_buy, working_sell = state.get_working(
+            signal.strategy_id, signal.instrument
+        )
 
         if leg.side is Side.BUY:
-            # After fill we'd be at current + qty. Ceiling is +max_long.
-            headroom = self._max_long - current
+            # Worst case: confirmed long + all working buys + this leg, all
+            # filled. Ceiling is +max_long.
+            headroom = self._max_long - (current + working_buy)
         else:
-            # After fill we'd be at current - qty. Floor is -max_short, so
-            # the most we can sell is current - (-max_short) = current + max_short.
-            headroom = current + self._max_short
+            # Worst case: confirmed (signed) - all working sells - this leg.
+            # Floor is -max_short, so sellable = (current - working_sell) + max_short.
+            headroom = (current - working_sell) + self._max_short
 
         if headroom <= 0:
             return RuleResult.reject(
                 self.name,
                 reason=(
                     f"position cap reached: current={current}, "
+                    f"working_buy={working_buy}, working_sell={working_sell}, "
                     f"max_long={self._max_long}, max_short={-self._max_short}"
                 ),
             )

@@ -36,6 +36,7 @@ class Topic:
     SIGNALS: Final[str] = "signals"
     RISK_DECISIONS: Final[str] = "risk-decisions"
     ORDERS: Final[str] = "orders"
+    OPEN_ORDERS: Final[str] = "open-orders"
     FILLS: Final[str] = "fills"
     POSITIONS: Final[str] = "positions"
     ACCOUNT: Final[str] = "account"
