@@ -105,6 +105,25 @@ function parseMessage(raw: string): PipelineAction | null {
       };
 
     case "orders": {
+      // ExecutionRoutedEvent rides the orders topic but is a routing-decision
+      // audit record, not an order lifecycle event — route it to its own row.
+      if (event_type === "execution_routed") {
+        return {
+          type: "ROUTING",
+          payload: {
+            id,
+            ts,
+            strategy_id: String(data.strategy_id ?? ""),
+            instrument: String((data.instrument as Record<string,unknown>)?.symbol ?? ""),
+            leg_id: String(data.leg_id ?? ""),
+            side: String(data.side ?? ""),
+            intent: String(data.intent ?? ""),
+            quantity: String(data.quantity ?? ""),
+            algo: String(data.algo ?? ""),
+            reason: String(data.reason ?? ""),
+          },
+        };
+      }
       // Map all order lifecycle event_types to a human-readable status label.
       const STATUS_MAP: Record<string, string> = {
         order_request:      "pending",

@@ -72,6 +72,19 @@ export interface FillRow {
   is_maker: boolean | null;
 }
 
+export interface RoutingRow {
+  id: string;
+  ts: number;  // ms since epoch
+  strategy_id: string;
+  instrument: string;
+  leg_id: string;
+  side: string;
+  intent: string;
+  quantity: string;
+  algo: string;
+  reason: string;
+}
+
 export interface PositionRow {
   id: string;
   strategy_id: string;
@@ -119,6 +132,7 @@ export interface PipelineState {
   riskDecisions: RiskRow[];                 // rolling 100
   orders: OrderRow[];                       // rolling 100
   fills: FillRow[];                         // rolling 100
+  routings: RoutingRow[];                   // rolling 100 — OMS execution-routing decisions
   positions: Record<string, PositionRow>;   // instrument -> latest position
   pnlHistory: PnlPoint[];                   // time-series for chart, rolling 500
   account: AccountSnapshot | null;          // latest exchange account snapshot
@@ -135,6 +149,7 @@ export const initialState: PipelineState = {
   riskDecisions: [],
   orders: [],
   fills: [],
+  routings: [],
   positions: {},
   pnlHistory: [],
   account: null,
@@ -150,6 +165,7 @@ export type PipelineAction =
   | { type: "RISK"; payload: RiskRow }
   | { type: "ORDER"; payload: OrderRow }
   | { type: "FILL"; payload: FillRow }
+  | { type: "ROUTING"; payload: RoutingRow }
   | { type: "POSITIONS_SNAPSHOT"; payload: PositionRow[] }
   | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
@@ -216,6 +232,10 @@ export function pipelineReducer(
       // Fills are recorded in the fills list; PnL sampling is driven by POSITION
       // updates which carry authoritative unrealized + realized figures.
       return { ...state, fills: cap(state.fills, action.payload, 100) };
+    }
+
+    case "ROUTING": {
+      return { ...state, routings: cap(state.routings, action.payload, 100) };
     }
 
     case "POSITIONS_SNAPSHOT": {

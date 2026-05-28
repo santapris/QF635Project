@@ -108,6 +108,10 @@ class RiskSpec(BaseModel):
 class OMSSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     signal_ttl_seconds: float = 300.0
+    # Cadence at which the OMS wakes execution algos to emit slices. Tune to
+    # the strategies' execution horizon — tighter for fast TWAPs, looser for
+    # slow unwinds.
+    algo_driver_interval_seconds: float = 0.1
 
 
 class PositionSpec(BaseModel):

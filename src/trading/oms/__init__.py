@@ -9,16 +9,24 @@ from .execution_algos import (
     VWAPAlgo,
 )
 from .order import Order
-from .router import OrderRouter
+from .router import (
+    DefaultExecutionRouter,
+    ExecutionRouter,
+    RoutingContext,
+    RoutingDecision,
+)
 from .state_machine import is_terminal, validate_transition
 
 __all__ = [
     "ChildOrderSpec",
+    "DefaultExecutionRouter",
     "ExecutionAlgo",
+    "ExecutionRouter",
     "ImmediateAlgo",
     "OMSEngine",
     "Order",
-    "OrderRouter",
+    "RoutingContext",
+    "RoutingDecision",
     "TWAPAlgo",
     "VWAPAlgo",
     "is_terminal",

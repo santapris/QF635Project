@@ -102,6 +102,31 @@ class TimeInForce(str, Enum):
     GTX = "GTX"  # Good-Till-Crossing (Futures post-only)
 
 
+class ExecutionIntent(str, Enum):
+    """A strategy's stance on *how* a leg should be executed — never the
+    algorithm itself.
+
+    Intent describes the strategy's relationship to time and price; the
+    OMS's :class:`~trading.oms.router.ExecutionRouter` maps intent (plus
+    market state and venue rules the strategy cannot see) to a concrete
+    execution algorithm. Strategies pick a stance; the router picks the
+    mechanics.
+    """
+
+    PASSIVE = "passive"
+    """Patient, maker-preferred. The order rests and queue position matters.
+    Always routed to place-in-place (no slicing) — this is the default and
+    reproduces market-making behaviour exactly."""
+
+    NORMAL = "normal"
+    """Default working order. The router decides whether to place as one
+    order or slice, based on size relative to liquidity/venue limits."""
+
+    URGENT = "urgent"
+    """Edge is decaying; cross the spread and fill now. The router may still
+    slice if the clip is too large for a single order under venue limits."""
+
+
 class OrderStatus(str, Enum):
     """Lifecycle states. Transitions enforced in oms/state_machine.py."""
 
@@ -148,6 +173,7 @@ __all__ = [
     "ClientOrderId",
     "EventId",
     "ExchangeOrderId",
+    "ExecutionIntent",
     "FillId",
     "Notional",
     "OrderId",

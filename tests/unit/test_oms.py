@@ -1,4 +1,4 @@
-"""Unit tests for OMS engine internals."""
+"""Unit tests for OMS engine internals — child/leg bookkeeping for sliced legs."""
 
 from __future__ import annotations
 
@@ -17,19 +17,28 @@ from trading.core import (
     TimeInForce,
 )
 from trading.core.types import ClientOrderId, OrderId, OrderStatus
+from trading.oms.engine import OMSEngine
 from trading.oms.order import Order
+
+
+class _NullBus:
+    async def publish(self, topic, event): pass
+    async def subscribe(self, topic, handler): pass
+    async def subscribe_many(self, topics, handler): pass
+    async def start(self): pass
+    async def stop(self): pass
 
 
 def _make_order(
     *,
-    parent_id: OrderId | None = None,
+    leg_id: str | None = None,
     quantity: str = "1",
     filled: str = "0",
     terminal: bool = False,
 ) -> Order:
     o = Order(
         order_id=OrderId(uuid4()),
-        client_order_id=ClientOrderId("test-coid"),
+        client_order_id=ClientOrderId(f"test-{uuid4().hex[:8]}"),
         strategy_id=StrategyId("test-strat"),
         instrument=Instrument(
             symbol="BTC-USDT",
@@ -46,7 +55,7 @@ def _make_order(
         price=Decimal("50000"),
         time_in_force=TimeInForce.GTC,
         created_at_ns=0,
-        parent_order_id=parent_id,
+        parent_leg_id=leg_id,
     )
     o.cumulative_filled = Decimal(filled)
     if terminal:
@@ -54,80 +63,50 @@ def _make_order(
     return o
 
 
-class _MinimalOMS:
-    """Thin wrapper that exposes only _orders and _parent_has_leaves for testing."""
-
-    def __init__(self):
-        self._orders: dict[OrderId, Order] = {}
-
-    def _parent_has_leaves(self, parent_id: OrderId) -> Decimal:
-        total = Decimal(0)
-        for order in self._orders.values():
-            if order.parent_order_id == parent_id and not order.is_terminal:
-                total += order.leaves_quantity
-        return total
+def _oms() -> OMSEngine:
+    return OMSEngine(bus=_NullBus(), clock=LiveClock())
 
 
-def test_parent_has_leaves_whole_quantity() -> None:
-    oms = _MinimalOMS()
-    parent_id = OrderId(uuid4())
-    child = _make_order(parent_id=parent_id, quantity="2")
+def test_leg_has_live_children_true_when_open_child_exists() -> None:
+    oms = _oms()
+    child = _make_order(leg_id="leg-1")
     oms._orders[child.order_id] = child
-
-    assert oms._parent_has_leaves(parent_id) == Decimal("2")
-
-
-def test_parent_has_leaves_fractional_quantity() -> None:
-    """Regression: previously int(total) truncated 0.00001 to 0."""
-    oms = _MinimalOMS()
-    parent_id = OrderId(uuid4())
-    child = _make_order(parent_id=parent_id, quantity="0.00001")
-    oms._orders[child.order_id] = child
-
-    leaves = oms._parent_has_leaves(parent_id)
-    assert leaves == Decimal("0.00001")
-    assert leaves > Decimal(0)
+    assert oms._leg_has_live_children("leg-1") is True
 
 
-def test_parent_has_leaves_partial_fill() -> None:
-    oms = _MinimalOMS()
-    parent_id = OrderId(uuid4())
-    child = _make_order(parent_id=parent_id, quantity="1", filled="0.3")
-    oms._orders[child.order_id] = child
-
-    assert oms._parent_has_leaves(parent_id) == Decimal("0.7")
-
-
-def test_parent_has_leaves_terminal_children_excluded() -> None:
-    oms = _MinimalOMS()
-    parent_id = OrderId(uuid4())
-    done = _make_order(parent_id=parent_id, quantity="1", filled="1", terminal=True)
-    live = _make_order(parent_id=parent_id, quantity="0.5")
+def test_leg_has_live_children_false_when_only_terminal_children() -> None:
+    oms = _oms()
+    done = _make_order(leg_id="leg-1", quantity="1", filled="1", terminal=True)
     oms._orders[done.order_id] = done
-    oms._orders[live.order_id] = live
-
-    assert oms._parent_has_leaves(parent_id) == Decimal("0.5")
+    assert oms._leg_has_live_children("leg-1") is False
 
 
-def test_parent_has_leaves_sums_multiple_children() -> None:
-    oms = _MinimalOMS()
-    parent_id = OrderId(uuid4())
-    c1 = _make_order(parent_id=parent_id, quantity="0.3")
-    c2 = _make_order(parent_id=parent_id, quantity="0.7")
-    oms._orders[c1.order_id] = c1
-    oms._orders[c2.order_id] = c2
-
-    assert oms._parent_has_leaves(parent_id) == Decimal("1.0")
+def test_leg_has_live_children_ignores_other_legs() -> None:
+    oms = _oms()
+    other = _make_order(leg_id="leg-2")
+    oms._orders[other.order_id] = other
+    assert oms._leg_has_live_children("leg-1") is False
 
 
-def test_parent_has_leaves_different_parent_ignored() -> None:
-    oms = _MinimalOMS()
-    parent_a = OrderId(uuid4())
-    parent_b = OrderId(uuid4())
-    child_a = _make_order(parent_id=parent_a, quantity="1")
-    child_b = _make_order(parent_id=parent_b, quantity="5")
-    oms._orders[child_a.order_id] = child_a
-    oms._orders[child_b.order_id] = child_b
+def test_leg_has_live_children_ignores_plain_orders() -> None:
+    """Orders with no parent_leg_id are plain quotes, not slice children."""
+    oms = _oms()
+    plain = _make_order(leg_id=None)
+    oms._orders[plain.order_id] = plain
+    assert oms._leg_has_live_children("leg-1") is False
 
-    assert oms._parent_has_leaves(parent_a) == Decimal("1")
-    assert oms._parent_has_leaves(parent_b) == Decimal("5")
+
+def test_retire_algo_removes_state() -> None:
+    from trading.oms.execution_algos import TWAPAlgo
+
+    oms = _oms()
+    algo = TWAPAlgo(
+        quantity=Decimal("1"), duration_seconds=60, num_slices=5, start_ns=0,
+    )
+    oms._algos["leg-1"] = algo
+    oms._algo_ctx["leg-1"] = (None, None)  # context not needed for retire
+
+    oms._retire_algo("leg-1")
+    assert "leg-1" not in oms._algos
+    assert "leg-1" not in oms._algo_ctx
+    assert algo.is_done()  # cancel() makes it done

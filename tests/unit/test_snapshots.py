@@ -66,6 +66,7 @@ def test_oms_snapshot_empty(clock) -> None:
     snap = oms.snapshot()
     assert snap["open_orders"] == 0
     assert snap["total_orders"] == 0
+    assert snap["active_algos"] == 0
     assert snap["dropped_events"] == 0
 
 

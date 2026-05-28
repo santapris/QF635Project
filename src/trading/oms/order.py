@@ -55,9 +55,11 @@ class Order:
     last_update_ns: Timestamp = 0
     reject_reason: str | None = None
 
-    # Parent linkage for child orders spawned by an execution algorithm.
-    # None means this order was issued directly (immediate routing).
-    parent_order_id: OrderId | None = None
+    # Linkage for child orders spawned by an execution algorithm. Holds the
+    # ``OrderLeg.leg_id`` of the leg whose algo emitted this child. None means
+    # the order was placed directly (PASSIVE / single-clip routing) and is a
+    # plain resting order, not a slice.
+    parent_leg_id: str | None = None
 
     # Fill ids we've already applied, so a duplicate fill from the order_gateway
     # is detected rather than double-counted.
@@ -75,7 +77,7 @@ class Order:
 
     @property
     def is_child(self) -> bool:
-        return self.parent_order_id is not None
+        return self.parent_leg_id is not None
 
     # --- Mutators ---------------------------------------------------------
 

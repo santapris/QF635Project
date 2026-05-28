@@ -32,6 +32,7 @@ from .types import (
     ClientOrderId,
     EventId,
     ExchangeOrderId,
+    ExecutionIntent,
     FillId,
     OrderId,
     OrderStatus,
@@ -159,6 +160,14 @@ class OrderLeg(BaseModel):
     )
     order_type: OrderType = OrderType.MARKET
     time_in_force: TimeInForce = TimeInForce.IOC
+    intent: ExecutionIntent = Field(
+        default=ExecutionIntent.PASSIVE,
+        description=(
+            "Strategy's execution stance. The OMS router maps this to a "
+            "concrete algo. PASSIVE (default) always places in-place with no "
+            "slicing — reproduces market-making behaviour."
+        ),
+    )
 
 
 class SignalEvent(BaseEvent):
@@ -303,6 +312,28 @@ class OrderRequest(BaseEvent):
     time_in_force: TimeInForce = TimeInForce.GTC
 
 
+class ExecutionRoutedEvent(BaseEvent):
+    """Audit record of the OMS router's execution decision for one leg.
+
+    Because a leg's intent (e.g. ``NORMAL``) maps to a concrete algo only
+    after the router weighs market state and venue rules, the decision is
+    not visible from the signal alone. This event makes it observable: it
+    says which algo (if any) the router chose for a leg, and why.
+    """
+
+    event_type: Literal["execution_routed"] = "execution_routed"
+    strategy_id: StrategyId
+    instrument: Instrument
+    leg_id: str
+    side: Side
+    intent: ExecutionIntent
+    quantity: Quantity
+    algo: str = Field(
+        description="Algo class chosen, or 'immediate' when placed as a single order.",
+    )
+    reason: str = Field(default="", description="Why the router chose this algo.")
+
+
 class CancelRequest(BaseEvent):
     event_type: Literal["cancel_request"] = "cancel_request"
     order_id: OrderId
@@ -429,6 +460,7 @@ Event = Annotated[
         RiskAlertEvent,
         KillSwitchEvent,
         OrderRequest,
+        ExecutionRoutedEvent,
         CancelRequest,
         AmendRequest,
         OrderAcknowledged,
@@ -451,6 +483,7 @@ __all__ = [
     "BaseEvent",
     "CancelRequest",
     "Event",
+    "ExecutionRoutedEvent",
     "FillEvent",
     "FundingRateEvent",
     "KillSwitchEvent",
