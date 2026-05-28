@@ -48,9 +48,9 @@ export default function DashboardPage({ state }: Props) {
       <Grid size={{ xs: 12, lg: 12 }} sx={{ minHeight: 300 }}>
         <Box sx={{ height: "100%", display: "flex", flexDirection: "column", gap: 1 }}>
           <Tabs value={tab} onChange={(_, v) => setTab(v)}>
+            <Tab label={`Open Orders (${nOpenOrders})`} />
             <Tab label={`Signals (${nSignals})`} />
             <Tab label={`Orders (${nOrders})`} />
-            <Tab label={`Open Orders (${nOpenOrders})`} />
           </Tabs>
           <Box sx={{ flex: 1, minHeight: 0 }}>
             {tab === 0 && <OpenOrdersPanel openOrders={state.openOrders} />}
