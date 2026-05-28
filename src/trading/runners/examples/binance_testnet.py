@@ -1,9 +1,7 @@
-"""Run the full Binance Spot testnet pipeline.
+"""Run the full Binance Futures testnet pipeline with Avellaneda-Stoikov MM.
 
 End-to-end wiring:
-- Feed handler: public WS connector + reuses the existing
-  :class:`BinanceNormalizer` from the core platform for ticker/trade
-  streams.
+- Feed handler: public WS connector (bookTicker + aggTrade streams).
 - Risk engine + per-strategy rules.
 - OMS.
 - Position engine.
@@ -11,24 +9,16 @@ End-to-end wiring:
 - :class:`ListenKeyManager` + :class:`BinanceUserDataStream` for the
   fill feedback loop.
 - :class:`BalanceReconciler` for the safety net.
-- A market-making strategy on BTC-USDT: quotes both sides around the
-  mid with inventory skew to keep the book balanced.
+- :class:`AvellanedaStoikovStrategy` — optimal MM quoting with microprice,
+  EWMA vol, OFI tilt, and VPIN toxicity gate.
 
 To run:
     python -m trading.runners.examples.binance_testnet
 
-This is a long-running process — Ctrl-C to stop. The strategy emits
-POST_ONLY GTC quotes on every tick; you'll see ack/fill events in the
-logs as the spread is crossed. Watch closely for the first few orders.
-If anything looks off (signature errors, weird symbols, unfamiliar
-message types) stop immediately and investigate before adding more
-capital.
-
-Strategy parameters (adjust before going live):
-- quote_size:          0.01 BTC   (~$1000 notional at BTC ~$100k)
-- target_spread_bps:   5 bps      (0.05% tight spread to attract more fills)
-- max_position:        0.05 BTC   (5× quote size; then that side withdraws)
-- inventory_skew_bps:  15 bps     (aggressive skew to burn down inventory fast)
+This is a long-running process — Ctrl-C to stop. Watch for POST_ONLY
+orders appearing in the logs within the first few ticks. If you see
+-2010 (cross) rejects, the post_only_guard is misfiring — investigate
+before running longer.
 """
 
 from __future__ import annotations
@@ -64,10 +54,12 @@ from trading.risk.rules import (
     ThrottleRule,
 )
 from trading.strategy import StrategyRegistry
-from trading.strategy.examples import MarketMakingStrategy
+from trading.strategy.examples.avellaneda_stoikov import AvellanedaStoikovStrategy
 from trading.config import load_settings
 from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
 from trading.runners.examples._runner_config import load_runner_config
+
+_STRATEGY_ID = StrategyId("avellaneda-stoikov")
 
 
 async def _amain() -> int:
@@ -99,13 +91,10 @@ async def _amain() -> int:
     risk.register_global_rules([
         InstrumentAllowlistRule(allowed_instrument_ids=["BINANCE:BTC-USDT"]),
     ])
-    risk.register_rules(StrategyId("market-maker"), [
-        # max_position must be >= MarketMakingStrategy.max_position so the
-        # risk engine never blocks quotes that are within the strategy's own cap.
-        MaxPositionRule(max_long=Decimal("0.05"), max_short=Decimal("0.05")),
-        MaxOrderSizeRule(max_quantity=Decimal("0.01")),     # one quote_size at a time
-        DailyLossLimitRule(max_loss=Decimal("200")),
-        ThrottleRule(max_signals=10, window_seconds=1.0),  # cap at 10 signals/s (5 ticks × 2 sides)
+    risk.register_rules(_STRATEGY_ID, [
+        MaxPositionRule(max_long=Decimal("0.01"), max_short=Decimal("0.01")),
+        MaxOrderSizeRule(max_quantity=Decimal("0.002")),
+        DailyLossLimitRule(max_loss=Decimal("50")),
     ])
     oms = OMSEngine(bus=bus, clock=clock)
 
@@ -113,15 +102,22 @@ async def _amain() -> int:
     portfolio = EnginePortfolioView(position)
     strategies = StrategyRegistry(bus=bus, clock=clock, portfolio=portfolio)
     strategies.register(
-        MarketMakingStrategy(
-            strategy_id=StrategyId("market-maker"),
+        AvellanedaStoikovStrategy(
+            strategy_id=_STRATEGY_ID,
             instruments=instruments,
-            quote_size=Decimal("0.01"),         # ~$1000 notional at BTC ~$100k
-            target_spread_bps=5.0,              # tight 0.05% spread to attract more fills
-            max_position=Decimal("0.05"),       # hold up to 5× quote_size before withdrawing a side
-            inventory_skew_bps=15.0,            # aggressive skew to burn down inventory fast
-            min_quote_interval_s=1.0,           # at most one requote per second
-            requote_threshold_bps=2.0,          # skip if mid moved < 0.02% since last quote
+            gamma=0.3,
+            k=1.5,
+            tau_seconds=300.0,
+            half_life_seconds=60.0,
+            ofi_window_seconds=10.0,
+            ofi_alpha=0.001,
+            vpin_bucket_volume=0.001,
+            vpin_threshold=0.7,
+            vpin_widen_factor=3.0,
+            quote_size=Decimal("0.002"),
+            max_position=Decimal("0.01"),
+            min_vol=0.5,             # 50% floor — BTC annual vol, stops sub-fee spreads
+            min_price_move_ticks=2,  # only re-quote when price moves ≥2 ticks
         ),
     )
 

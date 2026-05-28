@@ -7,6 +7,8 @@ strings. Keep the translation here so the order_gateway code doesn't sprinkle
 Binance Spot order types: ``LIMIT``, ``MARKET``, ``STOP_LOSS``,
 ``STOP_LOSS_LIMIT``, ``TAKE_PROFIT``, ``TAKE_PROFIT_LIMIT``, ``LIMIT_MAKER``.
 
+Binance Futures for post-only orders: ``LIMIT`` (type) + ``timeInForce=GTX`` (Good-Till-Crossing).
+
 Notable mappings:
 - Spot  ``POST_ONLY`` -> ``LIMIT_MAKER`` (TIF must be omitted)
 - Futures ``POST_ONLY`` -> ``LIMIT`` + ``timeInForce=GTX`` (LIMIT_MAKER does
