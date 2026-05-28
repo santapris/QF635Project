@@ -92,6 +92,8 @@ async def _amain() -> int:
         InstrumentAllowlistRule(allowed_instrument_ids=["BINANCE:BTC-USDT"]),
     ])
     risk.register_rules(_STRATEGY_ID, [
+        # Change based on whether there's stale open orders on testnet
+        # TODO: might need to build a cancel and replace order update flow to avoid this guard rejecting everything after the first few ticks
         MaxPositionRule(max_long=Decimal("0.01"), max_short=Decimal("0.01")),
         MaxOrderSizeRule(max_quantity=Decimal("0.002")),
         DailyLossLimitRule(max_loss=Decimal("50")),
@@ -210,6 +212,14 @@ async def _amain() -> int:
     # strategies — so a strategy's first tick sees the recovered state.
     await state_bootstrap.start()
     feed_task = asyncio.create_task(feed_handler.run(), name="binance-feed-handler")
+
+    async def _emit_pnl_snapshots() -> None:
+        while True:
+            await asyncio.sleep(1.0)
+            await position.mark_to_market_all()
+    
+    asyncio.create_task(_emit_pnl_snapshots(), name="pnl-snapshot-emitter")
+            
 
     # --- Shutdown handling --------------------------------------------
     stop_event = asyncio.Event()
