@@ -2,11 +2,21 @@
 
 ## Overview
 
-A real-time pipeline visualizer: a small WebSocket bridge in the Python backend
-broadcasts bus events and structured log records as JSON; a React frontend renders
-them across four panels plus a dedicated log viewer. The server is standalone —
-any stage wires it in with two lines, and it can be added or removed without
-touching existing runner logic.
+A real-time pipeline visualizer with **two channels of distinct semantics**:
+
+- **WebSocket (`/ws`) — the event stream.** Activity events (ticks, trades,
+  signals, risk decisions, orders, fills, execution-routing decisions) and log
+  records are broadcast as JSON. Clients see only events that fire while
+  connected.
+- **REST (`/state/*`) — state-of-the-world snapshots.** Positions, account
+  balances, and open orders are *state*, not events: they exist in the trading
+  process regardless of when the dashboard connects. The frontend polls these
+  on a timer, so panels populate correctly whether opened before or after the
+  pipeline starts, and a missed event can never leave a stale row.
+
+This split matches production dashboards: state is queryable and cacheable;
+events are streamed. The server is standalone — any stage wires it in with two
+lines, and it can be added or removed without touching runner logic.
 
 ---
 
@@ -17,17 +27,21 @@ AsyncioBus
     │
     ▼
 DashboardServer          (trading.monitoring.dashboard_server)
-  FastAPI + uvicorn      ws://localhost:8765/ws
-                         POST /api/killswitch  (Phase C)
+  Starlette + uvicorn    ws://localhost:8765/ws        (event stream)
+                         GET  /state/positions          (snapshot)
+                         GET  /state/account            (snapshot)
+                         GET  /state/open_orders         (snapshot)
     │
     ▼
 React App                (dashboard/)
-  usePipelineSocket      reconnects automatically on drop
+  usePipelineSocket      WS stream; reconnects on drop
+  useStatePoll           polls /state/* on a timer
     │
     ├── MarketDataPanel
     ├── SignalsPanel
-    ├── OrdersPanel
-    ├── PositionPanel + PnlChart
+    ├── OrdersPanel               (order lifecycle log)
+    ├── OpenOrdersPanel           (currently-resting orders, from snapshot)
+    ├── PositionPanel + PnlChart  (per-strategy rows + exchange net row)
     └── LogsPage
 ```
 
@@ -47,16 +61,31 @@ React App                (dashboard/)
 - Handle client connect/disconnect cleanly
 - Expose a `start()` / `stop()` interface matching other components
 
-### Topics subscribed
+### Topics streamed on the WebSocket
 | Topic | Events forwarded |
 |-------|-----------------|
 | `market-data` | `TickEvent`, `TradeEvent` |
 | `signals` | `SignalEvent` |
 | `risk-decisions` | `RiskDecision` |
-| `orders` | `OrderRequest`, `OrderAcknowledged`, `OrderCancelled`, `OrderRejected` |
+| `orders` | `OrderRequest`, `OrderAcknowledged`, `OrderCancelled`, `OrderRejected`, `ExecutionRoutedEvent` |
 | `fills` | `FillEvent` |
-| `positions` | `PositionUpdateEvent` |
+| `alerts` | `RiskAlertEvent`, `KillSwitchEvent` |
 | `logs`      | structlog records (level, logger, message, timestamp, extra fields) |
+
+Position, account, and open-order topics are intentionally **not** streamed —
+they are state, served via REST below. The server still subscribes to
+`open-orders`, `venue-positions`, and `account` to keep the latest snapshot in
+memory for those endpoints.
+
+### REST state endpoints
+| Endpoint | Source | Payload |
+|----------|--------|---------|
+| `GET /state/positions` | Position Engine (live) + cached `venue-positions` | per-strategy `positions[]` **and** `venue_net[]` (exchange ground truth) |
+| `GET /state/account` | cached `AccountSnapshotEvent` | wallet `balances[]` |
+| `GET /state/open_orders` | cached `OpenOrdersSnapshotEvent` | `exposures[]` (per-side aggregate) **and** `orders[]` (per-order detail) |
+
+CORS is permissive (read-only operator tool). The frontend `useStatePoll` hook
+polls these every 2–5 s and dispatches replace-wholesale snapshot actions.
 
 ### Wire-in to any stage (two lines)
 ```python
@@ -124,9 +153,10 @@ dashboard/
     ├── main.tsx
     ├── App.tsx                        # router setup, MUI theme provider
     ├── hooks/
-    │   └── usePipelineSocket.ts       # WebSocket connect/reconnect, message dispatch
+    │   ├── usePipelineSocket.ts       # WebSocket connect/reconnect, message dispatch
+    │   └── useStatePoll.ts            # polls /state/* REST snapshots on a timer
     ├── store/
-    │   └── pipelineStore.ts           # lightweight state (useReducer or zustand)
+    │   └── pipelineStore.ts           # useReducer state (events + snapshots)
     ├── pages/
     │   ├── DashboardPage.tsx          # route: /
     │   ├── LogsPage.tsx               # route: /logs
@@ -136,8 +166,9 @@ dashboard/
         ├── NavBar.tsx                 # MUI AppBar with route links + connection status
         ├── MarketDataPanel.tsx        # latest bid/ask/last per instrument
         ├── SignalsPanel.tsx           # signal + risk decision feed
-        ├── OrdersPanel.tsx            # order + fill event feed
-        ├── PositionPanel.tsx          # net qty, avg price, unrealised PnL table
+        ├── OrdersPanel.tsx            # order lifecycle log (all statuses)
+        ├── OpenOrdersPanel.tsx        # currently-resting orders (from snapshot)
+        ├── PositionPanel.tsx          # exchange net row + per-strategy rows
         ├── PnlChart.tsx               # Recharts line chart of PnL over time
         └── LogViewer.tsx              # filterable log feed (level + logger filters)
 ```
@@ -195,9 +226,20 @@ dashboard/
 - No auth — localhost dev tool only
 
 ### State model
-Each panel maintains a capped rolling buffer (e.g. last 100 events) so the
-page doesn't grow unbounded. PnL chart keeps a time-series array of
-`{ timestamp, unrealised_pnl }` points sampled from `PositionUpdateEvent`.
+Event-stream panels (market data, signals, orders, fills, logs) maintain capped
+rolling buffers (last ~100) so the page doesn't grow unbounded. Snapshot-backed
+panels (positions, account, open orders) are **replaced wholesale** on each
+poll — so anything no longer present on the server disappears, which is exactly
+the freshness behaviour we want.
+
+- **Positions**: `OpenOrdersPanel` and the per-strategy position rows are
+  fill-derived attribution; the **exchange net row** comes from `venue_net`
+  (ground truth, comparable to the exchange UI). Per-strategy rows are not
+  expected to sum to the net — the venue net includes external/manual activity.
+- **Open orders**: rendered from `/state/open_orders` `orders[]`, the
+  authoritative resting set — not filtered from the order log (a filtered log
+  drifts because fills arrive on a separate topic and never flip order status).
+- **PnL chart**: time-series sampled from the polled position snapshot.
 
 ---
 
@@ -207,8 +249,8 @@ page doesn't grow unbounded. PnL chart keeps a time-series array of
       forwarding (e.g. forward at most 1 tick/s per instrument) to avoid
       flooding the WebSocket?
 - [ ] Rolling buffer size per panel — 100 events? Configurable?
-- [ ] Should filled orders be visually distinguished from rejected ones with
-      colour coding?
+- [x] Should filled orders be visually distinguished from rejected ones with
+      colour coding? — yes; order/open-order panels colour-code by status.
 - [ ] Dark mode only, or light/dark toggle?
 - [ ] Should the PnL chart show unrealised PnL only, or also realised?
 

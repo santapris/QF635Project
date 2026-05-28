@@ -4,14 +4,30 @@
 
 ## Responsibilities
 
-- Validate every `SignalEvent` against pre-trade risk rules before order submission
-- Track real-time exposure per instrument and portfolio
+- Evaluate every `SignalEvent` against pre-trade rules — **per leg** — before
+  order submission
+- Track real-time exposure per instrument and portfolio, including
+  **working (unfilled) orders** so limits reflect effective exposure
 - Enforce position limits, drawdown limits, concentration limits
 - Trigger kill switch on breach of critical thresholds
-- Publish `RiskDecision` (approved / rejected / modified with reason)
+- Publish `RiskDecision` with per-leg approvals/rejections
 
-**Inputs**: `SignalEvent`, `PositionUpdateEvent`, `FillEvent`  
+**Inputs**: `SignalEvent`, `PositionUpdateEvent`, `FillEvent`,
+`OpenOrdersSnapshotEvent`  
 **Outputs**: `RiskDecision`, `KillSwitchEvent`, `RiskAlertEvent`
+
+## Per-Leg Evaluation
+
+A `SignalEvent` carries one or more `OrderLeg`s. Each leg runs the full rule
+chain independently; the outcome depends on `signal.atomic`:
+
+- `atomic=False` (default): failing legs are dropped, surviving legs are
+  approved. The decision carries both `approved_legs` and `rejected_legs`.
+- `atomic=True`: any leg rejection rejects the whole signal — no partial
+  placement.
+
+A `KILL`-severity rejection engages the kill switch and short-circuits the
+remaining legs of that signal.
 
 ## Module Structure
 
@@ -32,17 +48,35 @@ risk/
 
 ## Risk Rule Interface
 
+Rules evaluate a single leg against the shared `RiskState`. A rule may approve,
+approve-with-a-smaller-clamped-quantity, or reject.
+
 ```python
 class AbstractRiskRule(ABC):
     @abstractmethod
     def evaluate(
         self,
         signal: SignalEvent,
-        portfolio_state: PortfolioState,
-        config: RiskConfig,
-    ) -> RiskRuleResult: ...
-    # RiskRuleResult: passed=bool, reason=str, severity=INFO|WARN|BLOCK|KILL
+        leg: OrderLeg,
+        state: RiskState,
+    ) -> RuleResult: ...
+    # RuleResult: approved=bool, severity=INFO|WARN|BLOCK|KILL,
+    #             reason=str, approved_quantity=Quantity|None (clamp)
 ```
+
+## Working-Order-Aware Limits
+
+`RiskState` tracks two things per `(strategy, instrument)`: confirmed position
+(from fills / position updates) and **working-order exposure** (from the OMS's
+`OpenOrdersSnapshotEvent`, kept side-separated as `working_buy`/`working_sell`).
+
+`MaxPositionRule` computes headroom against *effective* exposure — confirmed
+position plus working orders on the same side — not confirmed fills alone.
+Without this, several orders each individually approved against stale
+fills-only state could collectively breach the cap once they fill (a
+double-approve hole). The working view trails signal evaluation by at most one
+in-flight signal, since `open-orders` and `signals` are separate topics;
+`MaxPositionRule` is a backstop and tolerates that lag.
 
 ## Pre-Trade Limits
 

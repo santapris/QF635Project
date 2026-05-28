@@ -121,13 +121,22 @@ Switch off the bus pattern (or layer something on top) when:
 
 ## Topic Map
 
-| Topic           | Producers              | Consumers                         |
-|-----------------|------------------------|-----------------------------------|
-| `market-data`   | Feed Handler           | Strategy, Risk, Position          |
-| `signals`       | Strategy Engine        | Risk Engine                       |
-| `risk-decisions`| Risk Engine            | OMS                               |
-| `orders`        | OMS                    | Order Gateways, Monitoring        |
-| `fills`         | Order Gateways         | OMS, Position Engine, Monitoring  |
-| `positions`     | Position Engine        | Risk Engine, Dashboard            |
-| `alerts`        | Risk, Feed, OMS        | Monitoring, Dashboard             |
-| `system`        | Kill Switch, Admin     | All components                    |
+| Topic             | Producers              | Consumers                         |
+|-------------------|------------------------|-----------------------------------|
+| `market-data`     | Feed Handler           | Strategy, Risk, Position, OMS     |
+| `signals`         | Strategy Engine        | Risk Engine, OMS                  |
+| `risk-decisions`  | Risk Engine            | OMS                               |
+| `orders`          | OMS                    | Order Gateways, Dashboard         |
+| `open-orders`     | OMS                    | Risk Engine, Dashboard            |
+| `fills`           | Order Gateways         | OMS, Position Engine, Risk, Dashboard |
+| `positions`       | Position Engine        | Risk Engine, Dashboard            |
+| `venue-positions` | State reconciler       | Dashboard                         |
+| `account`         | Balance reconciler     | Dashboard                         |
+| `alerts`          | Risk, Feed, OMS        | Monitoring, Dashboard             |
+| `system`          | Kill Switch, Admin     | All components                    |
+
+The OMS consumes `market-data` only to cache the latest mark for execution
+routing, and `signals` to cache pending signals for reconciliation against
+risk decisions. `open-orders`, `venue-positions`, and `account` carry
+state-of-the-world snapshots (replace-wholesale, self-healing); the dashboard
+serves these via polled REST endpoints rather than the WebSocket stream.

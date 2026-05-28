@@ -37,8 +37,36 @@ order_gateways/
     ├── order_translation.py # Internal order ↔ Binance order format
     ├── order_gateway.py     # Full Binance gateway implementation
     ├── errors.py            # Binance error code handling
-    └── reconciler.py        # Periodic position reconciliation via REST
+    ├── reconciler.py        # Periodic balance reconciliation (detect + alert)
+    └── state_bootstrap.py   # Startup adoption + periodic order/position resync
 ```
+
+## State Adoption & Reconciliation
+
+The system treats its in-memory order/position state as a cache that must be
+rebuilt from the venue — never as authoritative — so it can recover mid-trade
+across a restart. `state_bootstrap.py` (`StateBootstrapper`) owns this:
+
+**At startup** it fetches `GET /openOrders` and `GET /positionRisk` and:
+- adopts every open order into the OMS via `adopt_order(...)`, attributing by
+  `clientOrderId` (matching orders → their strategy; others → `external`);
+- publishes the venue's net positions verbatim as `VenuePositionSnapshotEvent`
+  (ground truth for the dashboard). It deliberately does **not** synthesize
+  fills into the Position Engine — that would corrupt the fill-derived
+  per-strategy books and PnL.
+
+**Periodically** (default 30 s) it re-pulls and reconciles: adopt orders the
+venue reports but we don't track; terminalize locally-open orders the venue no
+longer reports (filled/cancelled during a user-data-stream gap); refresh venue
+positions. This repairs drift from missed WS events.
+
+The older blanket "cancel all stale orders at startup" path is now opt-in
+(`oms.cancel_stale_orders_on_start`, default `False`) — wiping pre-existing
+orders is the opposite of adoption.
+
+`reconciler.py` remains the **balance** reconciler: it compares venue
+balances against our position books and *alerts* on mismatch (it does not
+silently correct).
 
 ## Supported Gateway Types
 

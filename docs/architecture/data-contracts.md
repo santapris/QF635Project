@@ -57,42 +57,85 @@ class OrderBookEvent(BaseEvent):
 
 ## Signal Event
 
+A `SignalEvent` is a strategy's **complete desired order state** for one
+instrument — not a single order. It carries a tuple of `OrderLeg`s: the full
+set of orders the strategy wants resting on the exchange right now. The OMS
+treats this as final state and reconciles open orders against it (place
+missing, cancel withdrawn, leave unchanged, cancel-replace on price/size
+change). An empty `legs` tuple means "cancel everything for this instrument."
+
 ```python
-class SignalSide(str, Enum):
-    BUY = "buy"
-    SELL = "sell"
-    CLOSE = "close"
+class ExecutionIntent(str, Enum):
+    PASSIVE = "passive"   # patient, maker-preferred; queue position matters
+    NORMAL  = "normal"    # router decides: single clip or slice by size
+    URGENT  = "urgent"    # cross the spread, fill now
+
+class OrderLeg(BaseModel):
+    leg_id: str                        # stable identity within the signal
+    side: Side
+    quantity: Quantity
+    price: Price | None = None         # None = market order
+    order_type: OrderType = OrderType.MARKET
+    time_in_force: TimeInForce = TimeInForce.IOC
+    intent: ExecutionIntent = ExecutionIntent.PASSIVE
 
 class SignalEvent(BaseEvent):
-    event_type: str = "signal"
-    strategy_id: str
-    instrument_id: str
-    side: SignalSide
-    target_quantity: Decimal           # Desired position change
-    target_price: Decimal | None       # None = market order
-    confidence: float                  # [0.0, 1.0]
-    rationale: str                     # Human-readable signal reason
-    metadata: dict = Field(default_factory=dict)
+    event_type: Literal["signal"] = "signal"
+    strategy_id: StrategyId
+    instrument: Instrument
+    legs: tuple[OrderLeg, ...] = ()     # complete desired order state
+    atomic: bool = False               # True = all-or-nothing across legs
+    rationale: str = ""
+    metadata: dict[str, str] = Field(default_factory=dict)
 ```
+
+**`leg_id`** is a stable per-leg identity. It lets ladder strategies place
+multiple legs on the same side, lets risk map approvals back to specific
+legs, and lets the OMS resume a sliced leg's execution algo across re-signals.
+
+**`atomic`** controls partial-rejection handling in risk:
+- `False` (default, market-making semantics): legs are independent. Risk
+  drops failing legs and approves the survivors.
+- `True` (pairs/hedged semantics): any leg rejection rejects the whole signal.
+  No partial placement.
 
 ## Risk Decision
 
+Risk evaluates each leg independently and reports the per-leg verdict.
+
 ```python
-class RiskDecisionStatus(str, Enum):
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    MODIFIED = "modified"   # Risk reduced the size
+class ApprovedLeg(BaseModel):
+    leg_id: str
+    side: Side
+    approved_quantity: Quantity        # may be clamped below requested
+
+class RejectedLeg(BaseModel):
+    leg_id: str
+    side: Side
+    rule_name: str
+    reason: str
+    severity: Severity
 
 class RiskDecision(BaseEvent):
-    event_type: str = "risk_decision"
-    signal_id: UUID                    # References SignalEvent.event_id
-    strategy_id: str
-    instrument_id: str
-    status: RiskDecisionStatus
-    approved_quantity: Decimal | None  # None if rejected
-    rejected_reason: str | None
-    risk_rule_results: list[dict]      # All rule evaluations
+    event_type: Literal["risk_decision"] = "risk_decision"
+    signal_event_id: EventId           # References SignalEvent.event_id
+    strategy_id: StrategyId
+    approved: bool
+    severity: Severity = Severity.INFO
+    rule_name: str | None = None       # rule that produced a rejection
+    reason: str = ""
+    approved_legs: tuple[ApprovedLeg, ...] = ()
+    rejected_legs: tuple[RejectedLeg, ...] = ()
 ```
+
+Semantics:
+- `approved=True`, all legs in `approved_legs`: every leg passed.
+- `approved=True` with non-empty `rejected_legs`: partial approval (only when
+  `signal.atomic=False`) — the OMS places the approved legs.
+- `approved=False`: nothing placed; `rejected_legs` enumerates why.
+
+A `KILL`-severity rejection engages the kill switch and short-circuits the
+remaining legs of that signal.
 
 ## Order Events
 
@@ -134,6 +177,26 @@ class OrderAcknowledged(BaseEvent):
     status: OrderStatus = OrderStatus.ACKNOWLEDGED
 ```
 
+### Execution Routed (audit)
+
+When a leg's `intent` is `NORMAL`, whether it slices depends on the router's
+view of size and venue rules — so the decision isn't visible from the signal
+alone. The OMS publishes an audit record of what it chose, on the `orders`
+topic.
+
+```python
+class ExecutionRoutedEvent(BaseEvent):
+    event_type: Literal["execution_routed"] = "execution_routed"
+    strategy_id: StrategyId
+    instrument: Instrument
+    leg_id: str
+    side: Side
+    intent: ExecutionIntent
+    quantity: Quantity
+    algo: str                          # "immediate", "TWAPAlgo", ...
+    reason: str                        # why the router chose this
+```
+
 ## Fill Event
 
 ```python
@@ -170,6 +233,69 @@ class PositionUpdateEvent(BaseEvent):
     trigger: Literal["fill", "mark_to_market", "reconciliation"]
 ```
 
+## Open Orders Snapshot
+
+The OMS is the single writer of order state; risk and the dashboard are
+read-only consumers. Whenever the open-order set changes (place, ack, reject,
+cancel, fill) the OMS publishes a full snapshot on the `open-orders` topic.
+**Snapshot semantics** — replace wholesale; anything absent is no longer open,
+and a dropped snapshot self-heals on the next one.
+
+```python
+class WorkingExposure(BaseModel):
+    strategy_id: StrategyId
+    instrument: Instrument
+    working_buy: Quantity              # Σ leaves on open BUY orders
+    working_sell: Quantity             # Σ leaves on open SELL orders
+    open_order_count: int
+
+class OpenOrderDetail(BaseModel):
+    order_id: str
+    client_order_id: str
+    strategy_id: StrategyId
+    instrument: Instrument
+    side: Side
+    order_type: OrderType
+    quantity: Quantity
+    leaves_quantity: Quantity
+    price: Price | None = None
+    status: OrderStatus
+    created_at_ns: Timestamp
+
+class OpenOrdersSnapshotEvent(BaseEvent):
+    event_type: Literal["open_orders_snapshot"] = "open_orders_snapshot"
+    exposures: tuple[WorkingExposure, ...] = ()  # per-side aggregate (risk)
+    orders: tuple[OpenOrderDetail, ...] = ()     # per-order detail (dashboard)
+```
+
+Buy and sell are kept **separate, not netted** — a flat position with a
+working buy and a working sell is not flat exposure; either fill moves you off
+zero. Risk consumes `exposures` so `MaxPositionRule` checks *effective*
+exposure (confirmed position + working orders), closing a double-approve hole.
+
+## Venue Position Snapshot
+
+Exchange-reported net position per instrument — ground truth, directly
+comparable to the exchange UI. Published by the venue gateway's state
+reconciler on a poll of the position endpoint, on the `venue-positions` topic.
+Distinct from the per-strategy books the Position Engine derives from fills:
+the venue knows only the net across everything (all strategies plus external /
+manual trading), so this is published verbatim and never folded into the
+fill-driven books.
+
+```python
+class VenuePosition(BaseModel):
+    instrument: Instrument
+    net_quantity: Quantity             # signed: +long, -short
+    entry_price: Price
+    mark_price: Price
+    unrealized_pnl: Price
+
+class VenuePositionSnapshotEvent(BaseEvent):
+    event_type: Literal["venue_position_snapshot"] = "venue_position_snapshot"
+    positions: tuple[VenuePosition, ...] = ()
+```
+
 ## Portfolio Snapshot
 
 ```python
@@ -186,13 +312,28 @@ class PortfolioSnapshot(BaseModel):
 
 ## Topic Map
 
-| Topic           | Producers              | Consumers                        |
-|-----------------|------------------------|----------------------------------|
-| `market-data`   | Feed Handler           | Strategy, Risk, Position         |
-| `signals`       | Strategy Engine        | Risk Engine                      |
-| `risk-decisions`| Risk Engine            | OMS                              |
-| `orders`        | OMS                    | Exchange OrderGateway, Monitoring |
-| `fills`         | Exchange OrderGateway  | OMS, Position Engine, Monitoring |
-| `positions`     | Position Engine        | Risk Engine, Dashboard           |
-| `alerts`        | Risk, Feed, OMS        | Monitoring, Dashboard            |
-| `system`        | Kill Switch, Admin     | All components                   |
+| Topic             | Producers              | Consumers                          |
+|-------------------|------------------------|------------------------------------|
+| `market-data`     | Feed Handler           | Strategy, Risk, Position, OMS¹     |
+| `signals`         | Strategy Engine        | Risk Engine, OMS²                  |
+| `risk-decisions`  | Risk Engine            | OMS                                |
+| `orders`          | OMS                    | Order Gateways, Dashboard          |
+| `open-orders`     | OMS                    | Risk Engine, Dashboard             |
+| `fills`           | Order Gateways         | OMS, Position Engine, Risk, Dashboard |
+| `positions`       | Position Engine        | Risk Engine, Dashboard             |
+| `venue-positions` | State reconciler       | Dashboard                          |
+| `account`         | Balance reconciler     | Dashboard                          |
+| `alerts`          | Risk, Feed, OMS        | Monitoring, Dashboard              |
+| `system`          | Kill Switch, Admin     | All components                     |
+
+¹ The OMS subscribes to `market-data` only to cache the latest mark per
+  instrument for the execution router's sizing — it does **not** drive
+  execution algos from ticks (that's a timer; see [OMS](components/oms.md)).
+² The OMS caches each `SignalEvent` so it can rebuild the approved signal when
+  the matching `RiskDecision` arrives.
+
+`ExecutionRoutedEvent` rides the `orders` topic (it is OMS-produced
+order-lifecycle metadata). `OpenOrdersSnapshotEvent`, `VenuePositionSnapshotEvent`,
+and `AccountSnapshotEvent` are *state-of-the-world* snapshots: the dashboard
+serves them via polled REST endpoints rather than the WebSocket event stream
+(see [Dashboard](dashboard.md)).
