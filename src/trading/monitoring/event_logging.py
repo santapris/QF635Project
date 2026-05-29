@@ -16,7 +16,7 @@ from typing import Any
 
 import structlog
 
-from ..core.events import BaseEvent
+from ..core.events import BaseEvent, OrderRejected
 from ..event_bus.base import AbstractEventBus, Topic
 
 _Logger = structlog.stdlib.BoundLogger
@@ -67,7 +67,8 @@ def _make_handler(log: _Logger, topic: str, level: str):
     log_fn = getattr(log, level)
 
     async def _handle(event: Any) -> None:
-        log_fn(
+        fn = log.warning if isinstance(event, OrderRejected) else log_fn
+        fn(
             event_name,
             event_type=type(event).__name__,
             **_extract(event, fields),
