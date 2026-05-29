@@ -255,6 +255,24 @@ class OMSEngine:
         if order is None:
             _log.warning("fill_for_unknown_order_id_ignoring", order_id=event.order_id)
             return
+        if order.is_terminal:
+            # Fill arrived after the order reached a terminal state (e.g. cancel-fill
+            # race). The exchange processed the fill before our cancel landed; log and
+            # skip — the strategy already received the fill callback via the bus.
+            #
+            # TODO: this skips updating order.cumulative_filled / average_fill_price,
+            # so the OMS's fill accounting for this order is incomplete. If anything
+            # downstream reads those fields after cancellation (reconciliation, PnL,
+            # algo slicing) it will see stale data. Fix: split apply_fill into a
+            # data-update step and a state-transition step so a terminal order can
+            # still absorb the fill accounting without attempting an illegal transition.
+            _log.warning(
+                "fill_on_terminal_order_ignored",
+                order_id=event.order_id,
+                order_status=order.status,
+                fill_id=event.fill_id,
+            )
+            return
         applied = order.apply_fill(event)
         if not applied:
             _log.info("duplicate_fill_ignored", fill_id=event.fill_id)
