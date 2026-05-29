@@ -135,13 +135,14 @@ class BinanceUserDataStream:
     # --- Bus snoop -------------------------------------------------------
 
     async def _on_order_event(self, event: BaseEvent) -> None:
-        """Snoop on OrderAcknowledged to capture client_order_id -> order_id.
+        """Snoop on OrderRequest/OrderAcknowledged to capture client_order_id -> order_id.
 
-        We don't republish — that's the order_gateway's job. We just learn the
-        mapping so we can stamp incoming WS fills with the correct OrderId.
+        We register on OrderRequest (before the REST call) so the mapping is
+        already present when a fast-filling MARKET order's executionReport
+        arrives on the WS — avoiding a race between the REST ack and the WS fill.
         """
-        from ...core.events import OrderAcknowledged
-        if isinstance(event, OrderAcknowledged):
+        from ...core.events import OrderAcknowledged, OrderRequest
+        if isinstance(event, (OrderRequest, OrderAcknowledged)):
             self._client_to_order_id[event.client_order_id] = event.order_id
 
     # --- Run loop --------------------------------------------------------
