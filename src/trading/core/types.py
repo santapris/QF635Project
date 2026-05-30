@@ -138,6 +138,7 @@ class OrderStatus(str, Enum):
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
+    PENDING_AMEND = "PENDING_AMEND"
 
     @property
     def is_terminal(self) -> bool:

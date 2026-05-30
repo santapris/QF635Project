@@ -39,6 +39,7 @@ _LEGAL_TRANSITIONS: dict[OrderStatus | None, frozenset[OrderStatus]] = {
         OrderStatus.PENDING_CANCEL,
         OrderStatus.CANCELLED,
         OrderStatus.EXPIRED,
+        OrderStatus.PENDING_AMEND,
     }),
     OrderStatus.PARTIALLY_FILLED: frozenset({
         OrderStatus.PARTIALLY_FILLED,  # subsequent partial
@@ -46,11 +47,22 @@ _LEGAL_TRANSITIONS: dict[OrderStatus | None, frozenset[OrderStatus]] = {
         OrderStatus.PENDING_CANCEL,
         OrderStatus.CANCELLED,
         OrderStatus.EXPIRED,
+        OrderStatus.PENDING_AMEND,
     }),
     OrderStatus.PENDING_CANCEL: frozenset({
         OrderStatus.CANCELLED,
         OrderStatus.PARTIALLY_FILLED,  # fill raced the cancel
         OrderStatus.FILLED,            # fill raced the cancel and won
+    }),
+    # Amend in-flight: can confirm back to ACKNOWLEDGED, race with a fill,
+    # or the venue can kill the order (treat as CANCELLED).
+    OrderStatus.PENDING_AMEND: frozenset({
+        OrderStatus.ACKNOWLEDGED,      # amend confirmed, order back to resting
+        OrderStatus.PARTIALLY_FILLED,  # fill raced the amend
+        OrderStatus.FILLED,            # fill won the race
+        OrderStatus.CANCELLED,         # venue cancelled order during amend
+        OrderStatus.REJECTED,          # venue rejected the amend entirely
+        OrderStatus.PENDING_CANCEL,    # caller decided to cancel mid-amend
     }),
     # Terminal states deliberately have no entries; lookup falls through.
 }

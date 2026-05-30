@@ -375,6 +375,15 @@ class OrderCancelled(BaseEvent):
     reason: str = ""
 
 
+class OrderAmended(BaseEvent):
+    event_type: Literal["order_amended"] = "order_amended"
+    order_id: OrderId
+    client_order_id: ClientOrderId
+    new_price: Price | None = None
+    new_quantity: Quantity | None = None
+    new_exchange_order_id: ExchangeOrderId | None = None
+
+
 class FillEvent(BaseEvent):
     """A partial or complete execution. Multiple fills per order are possible."""
 
@@ -555,6 +564,7 @@ Event = Annotated[
         OrderAcknowledged,
         OrderRejected,
         OrderCancelled,
+        OrderAmended,
         FillEvent,
         PositionUpdateEvent,
         PnLSnapshotEvent,
@@ -579,6 +589,7 @@ __all__ = [
     "FundingRateEvent",
     "KillSwitchEvent",
     "OrderAcknowledged",
+    "OrderAmended",
     "OrderBookEvent",
     "OrderBookLevel",
     "OrderCancelled",

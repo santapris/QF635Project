@@ -1,32 +1,30 @@
-"""Binance Spot order order_gateway.
+"""Binance order gateway (Spot and Futures).
 
-Implements :class:`AbstractOrderGateway`. Subscribes to the ``orders`` topic
-for our outbound :class:`OrderRequest` / :class:`CancelRequest` /
-:class:`AmendRequest` events, translates them to Binance REST calls,
-and publishes the canonical :class:`OrderAcknowledged` / :class:`OrderRejected`
-/ :class:`OrderCancelled` events on the same topic in response.
+Implements :class:`AbstractOrderGateway`. Whether it targets Spot or Futures
+is determined entirely by :attr:`BinanceConfig.futures` — no code outside
+this module (OMS, strategies) needs to know. Subscribes to the ``orders``
+topic for outbound :class:`OrderRequest` / :class:`CancelRequest` /
+:class:`AmendRequest` events, translates them to Binance REST calls, and
+publishes the canonical response events on the same topic.
 
 Important behaviour notes:
 
 - **Idempotency via client order id.** Every order we send includes the
   caller's ``client_order_id`` as ``newClientOrderId``. If we time out
-  and retry, Binance dedupes by this id — that's the whole point of
-  having one. Binance restricts ``newClientOrderId`` characters; we
-  do not encode or transform — the OMS's id (already ``{strat}-{hex}``
-  in batch 7) is safe.
+  and retry, Binance deduplicates by this id. Binance restricts
+  ``newClientOrderId`` characters; the OMS's id format (``{strat}-{hex}``)
+  is already safe.
 
-- **Fills do NOT come from REST responses.** The order endpoint
-  response contains fills in some cases (notably ``MARKET`` with
-  ``newOrderRespType=FULL``), but the canonical source of fills is the
-  user-data WebSocket. We rely on that and ignore the fills array in
-  the REST response, except for one case: an immediate full fill on
-  ``newOrderRespType=ACK`` returns ``status=FILLED`` with no fill detail,
-  which the user-data stream must then deliver.
+- **Fills do NOT come from REST responses.** The canonical source of fills
+  is the user-data WebSocket. We ignore the fills array in REST responses.
 
-- **Order-amend semantics.** Binance Spot does NOT support modify; cancel-
-  replace is the idiom. We implement :meth:`_handle_amend` as
-  cancel-then-place. If the cancel succeeds and the place fails, we
-  publish a rejection — the OMS knows how to handle it.
+- **Amend semantics are venue-capability-driven.**
+  Futures supports a native PUT amend (``PUT /fapi/v1/order``) — one
+  round-trip, emits ``OrderAmended``.
+  Spot has no modify endpoint — we cancel the old order and emit
+  ``OrderCancelled``; the OMS then re-places a fresh order on the next
+  reconcile tick. The OMS sees only canonical events; it does not know or
+  care which path ran.
 """
 
 from __future__ import annotations
@@ -42,6 +40,7 @@ from ...core.events import (
     BaseEvent,
     CancelRequest,
     OrderAcknowledged,
+    OrderAmended,
     OrderCancelled,
     OrderRejected,
     OrderRequest,
@@ -102,6 +101,10 @@ class BinanceOrderGateway(AbstractOrderGateway):
         # carries our OrderId, not the exchange's.
         self._exchange_ids: dict[OrderId, ExchangeOrderId] = {}
         self._client_to_internal: dict[ClientOrderId, OrderId] = {}
+        # client_order_id -> wire side string ("BUY"/"SELL"). Required by the
+        # Futures PUT amend endpoint, which demands side even though the order
+        # is already resting. Populated at ack time from the original OrderRequest.
+        self._order_sides: dict[ClientOrderId, str] = {}
         self._started = False
         self._dropped_events: int = 0
 
@@ -179,6 +182,7 @@ class BinanceOrderGateway(AbstractOrderGateway):
         exchange_order_id = ExchangeOrderId(str(resp["orderId"]))
         self._exchange_ids[req.order_id] = exchange_order_id
         self._client_to_internal[req.client_order_id] = req.order_id
+        self._order_sides[req.client_order_id] = side_to_binance(req.side)
         await self._publish_ack(req, exchange_order_id)
 
         # If Binance reports the order as already DONE in this response
@@ -250,27 +254,110 @@ class BinanceOrderGateway(AbstractOrderGateway):
         # the REST response confirms acceptance, not that the cancel
         # is complete.
 
-    # --- Amend (cancel-replace) ------------------------------------------
+    # --- Amend -----------------------------------------------------------
 
     async def _handle_amend(self, req: AmendRequest) -> None:
+        """Amend a resting order using the best method available for this venue mode.
+
+        Futures: native PUT amend — single round-trip, emits ``OrderAmended``.
+        Spot: no modify endpoint — cancel the old order (emits ``OrderCancelled``),
+              OMS re-places a fresh order on the next reconcile tick.
+
+        The OMS sees only the canonical event; it is unaware of which path ran.
+        """
         if req.instrument.exchange != self.venue:
             return
-        # Binance Spot doesn't support modify. Cancel, then the strategy
-        # (or its agent) must place a fresh order — we don't do the
-        # replace automatically because the new size/price comes from
-        # AmendRequest and the strategy would need to also see the
-        # cancel result before deciding whether to proceed.
-        #
-        # For the MVP: surface this as unsupported. A real implementation
-        # would either implement cancel-replace here or push it back to
-        # the OMS, which would have to take care of cross-event ordering.
-        await self._publish_cancel_rejected(
-            CancelRequest(
-                ts_event=req.ts_event, ts_ingest=req.ts_ingest, source=req.source,
-                order_id=req.order_id, client_order_id=req.client_order_id,
-                instrument=req.instrument,
+        if self._config.futures:
+            await self._handle_amend_futures(req)
+        else:
+            await self._handle_amend_spot(req)
+
+    async def _handle_amend_futures(self, req: AmendRequest) -> None:
+        """Futures native amend via PUT /fapi/v1/order."""
+        wire_symbol = self._symbols.wire_symbol(req.instrument)
+        side = self._order_sides.get(req.client_order_id)
+        if side is None:
+            # Order was placed before this process started (adopted from venue).
+            # We don't have the side so we can't issue the PUT — fall back to
+            # cancel+re-place via the spot path.
+            await self._handle_amend_spot(req)
+            return
+        params: dict[str, Any] = {
+            "symbol": wire_symbol,
+            "side": side,
+            "origClientOrderId": req.client_order_id,
+        }
+        if req.new_price is not None:
+            params["price"] = self._format_decimal(req.new_price)
+        if req.new_quantity is not None:
+            params["quantity"] = self._format_decimal(req.new_quantity)
+        try:
+            resp = await self._rest.request(
+                "PUT", self._config.api_prefix + "/order",
+                params=params, signed=True, weight=_W_NEW_ORDER,
+            )
+        except OrderError as exc:
+            _log.info(
+                "binance_futures_amend_rejected",
+                order_id=req.order_id, reason=exc.message,
+            )
+            await self._publish_amend_reject(req, exc.message)
+            return
+        except OrderGatewayError as exc:
+            _log.exception("binance_futures_amend_transport_error", order_id=req.order_id)
+            await self._publish_amend_reject(req, f"transport error: {exc}")
+            return
+
+        new_exchange_id = ExchangeOrderId(str(resp["orderId"])) if "orderId" in resp else None
+        await self._safe_publish(
+            Topic.ORDERS,
+            OrderAmended(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source=self.venue,
+                order_id=req.order_id,
+                client_order_id=req.client_order_id,
+                new_price=req.new_price,
+                new_quantity=req.new_quantity,
+                new_exchange_order_id=new_exchange_id,
             ),
-            reason="binance amend not implemented; cancel and resubmit",
+        )
+
+    async def _handle_amend_spot(self, req: AmendRequest) -> None:
+        """Spot cancel-replace: cancel the old order, OMS re-places on next tick."""
+        wire_symbol = self._symbols.wire_symbol(req.instrument)
+        try:
+            await self._rest.request(
+                "DELETE", self._config.api_prefix + "/order",
+                params={"symbol": wire_symbol, "origClientOrderId": req.client_order_id},
+                signed=True, weight=_W_CANCEL_ORDER,
+            )
+        except OrderError as exc:
+            # Already gone (filled or cancelled) — user-data stream delivers the
+            # real event. Reject the amend so the OMS exits PENDING_AMEND cleanly.
+            _log.info(
+                "binance_spot_amend_cancel_order_already_done",
+                order_id=req.order_id, reason=exc.message,
+            )
+            await self._publish_amend_reject(req, f"cancel step failed: {exc.message}")
+            return
+        except OrderGatewayError as exc:
+            _log.exception("binance_spot_amend_cancel_transport_error", order_id=req.order_id)
+            await self._publish_amend_reject(req, f"transport error: {exc}")
+            return
+
+        # Cancel accepted by venue. Emit OrderCancelled immediately so the OMS
+        # exits PENDING_AMEND without waiting for the user-data WS event.
+        # A duplicate OrderCancelled from the WS later is harmless (CANCELLED is terminal).
+        await self._safe_publish(
+            Topic.ORDERS,
+            OrderCancelled(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source=self.venue,
+                order_id=req.order_id,
+                client_order_id=req.client_order_id,
+            ),
         )
 
     # --- Publish helpers --------------------------------------------------
@@ -321,6 +408,20 @@ class BinanceOrderGateway(AbstractOrderGateway):
                 order_id=req.order_id,
                 client_order_id=req.client_order_id,
                 reason=f"cancel failed: {reason}",
+            ),
+        )
+
+    async def _publish_amend_reject(self, req: AmendRequest, reason: str) -> None:
+        """Signal that the cancel step of a cancel-replace failed."""
+        await self._safe_publish(
+            Topic.ORDERS,
+            OrderRejected(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source=self.venue,
+                order_id=req.order_id,
+                client_order_id=req.client_order_id,
+                reason=f"amend failed: {reason}",
             ),
         )
 

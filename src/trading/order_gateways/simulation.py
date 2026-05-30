@@ -40,6 +40,7 @@ from ..core.events import (
     CancelRequest,
     FillEvent,
     OrderAcknowledged,
+    OrderAmended,
     OrderCancelled,
     OrderRejected,
     OrderRequest,
@@ -232,17 +233,29 @@ class SimulationOrderGateway(AbstractOrderGateway):
         )
 
     async def _handle_amend_request(self, req: AmendRequest) -> None:
-        """Amend is cancel+replace under the hood for the sim."""
         await self._sleep_ms(self._cfg.latency.cancel_ack_ms)
         order = self._resting.get(req.order_id)
         if order is None:
             await self._publish_reject_cancel(req, "order not found for amend")
             return
-        if req.new_quantity is not None:
-            order.quantity = req.new_quantity
-            order.leaves = req.new_quantity  # naive: amends discard prior fills
         if req.new_price is not None:
             order.price = req.new_price
+        if req.new_quantity is not None:
+            already_filled = order.quantity - order.leaves
+            order.quantity = req.new_quantity
+            order.leaves = Quantity(max(Decimal(0), req.new_quantity - already_filled))
+        await self._bus.publish(
+            Topic.ORDERS,
+            OrderAmended(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source=self._venue,
+                order_id=req.order_id,
+                client_order_id=req.client_order_id,
+                new_price=req.new_price,
+                new_quantity=req.new_quantity,
+            ),
+        )
 
     # --- Fill paths -------------------------------------------------------
 

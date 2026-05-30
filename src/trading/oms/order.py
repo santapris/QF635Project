@@ -65,6 +65,9 @@ class Order:
     # is detected rather than double-counted.
     _applied_fills: set[str] = field(default_factory=set)
 
+    # Desired (price, quantity) from a pending amend, committed on OrderAmended confirm.
+    pending_amend: tuple[Price, Quantity] | None = None
+
     # --- Derived ----------------------------------------------------------
 
     @property

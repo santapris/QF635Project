@@ -35,6 +35,7 @@ from uuid import uuid4
 
 from ..core.clock import Clock
 from ..core.events import (
+    AmendRequest,
     BaseEvent,
     CancelRequest,
     EventId,
@@ -43,6 +44,7 @@ from ..core.events import (
     OpenOrderDetail,
     OpenOrdersSnapshotEvent,
     OrderAcknowledged,
+    OrderAmended,
     OrderCancelled,
     OrderLeg,
     OrderRejected,
@@ -236,10 +238,12 @@ class OMSEngine:
         elif isinstance(event, OrderCancelled):
             await self._handle_cancel(event)
             await self._publish_open_orders()  # cancel removes working exposure
+        elif isinstance(event, OrderAmended):
+            await self._handle_amend(event)
+            await self._publish_open_orders()  # price/qty change = exposure change
         # An ack doesn't change leaves (PENDING_NEW already counted), so no
         # republish there. OrderRequest / CancelRequest / AmendRequest are our
         # own echoes — ignored.
-        # ignore.
 
     async def _on_market_data(self, event: BaseEvent) -> None:
         # Cache the latest mark so the router can size orders. Deliberately
@@ -323,6 +327,22 @@ class OMSEngine:
         except InvalidStateTransitionError:
             return
 
+    async def _handle_amend(self, event: OrderAmended) -> None:
+        order = self._orders.get(event.order_id)
+        if order is None:
+            return
+        try:
+            order.transition_to(OrderStatus.ACKNOWLEDGED, at_ns=event.ts_event)
+        except InvalidStateTransitionError:
+            # Raced a fill or cancel that already moved the order past PENDING_AMEND.
+            order.pending_amend = None
+            return
+        if order.pending_amend is not None:
+            order.price, order.quantity = order.pending_amend
+            order.pending_amend = None
+        if event.new_exchange_order_id is not None:
+            order.exchange_order_id = event.new_exchange_order_id
+
     # --- Quote reconciliation and placement ------------------------------
 
     async def _reconcile_quotes(self, signal: SignalEvent) -> None:
@@ -365,53 +385,59 @@ class OMSEngine:
     async def _reconcile_immediate(
         self, signal: SignalEvent, legs: list[OrderLeg]
     ) -> None:
-        """Match-or-replace reconciliation for non-sliced legs.
+        """Match-or-amend-or-replace reconciliation for non-sliced legs.
 
         Considers only plain resting orders (``parent_leg_id is None``) so it
-        never cancels a slice child as 'stale'. Scoped to ``signal.strategy_id``,
-        which also means adopted EXTERNAL orders (and other strategies' orders)
-        are never touched here — a strategy only reconciles what it owns.
+        never cancels a slice child as 'stale'. Scoped to ``signal.strategy_id``.
+
+        For each desired leg we look for a resting order on the same side:
+        - Exact match (side, price, leaves): no-op — preserve queue position.
+        - Price/qty differs but order is live (ACKNOWLEDGED/PARTIALLY_FILLED):
+          send an AmendRequest rather than cancel+place, saving one round-trip
+          and preserving queue position at the new price.
+        - Order is in PENDING_AMEND: skip this tick — wait for the confirm.
+        - No resting order on this side: place a fresh order.
+
+        Sides no longer in the desired set are cancelled.
         """
         sid = signal.strategy_id
         iid = signal.instrument.instrument_id
-        active = (OrderStatus.PENDING_NEW, OrderStatus.ACKNOWLEDGED, OrderStatus.PARTIALLY_FILLED)
+        amendable = (OrderStatus.ACKNOWLEDGED, OrderStatus.PARTIALLY_FILLED)
+        active = (OrderStatus.PENDING_NEW, *amendable, OrderStatus.PENDING_AMEND)
 
-        open_orders: list[Order] = [
-            o for o in self._orders.values()
-            if o.strategy_id == sid
-            and o.instrument.instrument_id == iid
-            and o.status in active
-            and o.parent_leg_id is None
-        ]
+        # One resting plain order per side (market-making emits at most one per side).
+        open_by_side: dict[Side, Order] = {}
+        for o in self._orders.values():
+            if (
+                o.strategy_id == sid
+                and o.instrument.instrument_id == iid
+                and o.parent_leg_id is None
+                and o.status in active
+            ):
+                open_by_side.setdefault(o.side, o)
 
-        # Greedily pair each desired leg with one open order at the same
-        # (side, price, leaves). Pairing is one-to-one — a given open order
-        # can only satisfy one leg.
-        unmatched_open: set[OrderId] = {o.order_id for o in open_orders}
-        legs_to_place: list[OrderLeg] = []
-
+        desired_sides: set[Side] = set()
         for leg in legs:
-            match = next(
-                (o for o in open_orders
-                 if o.order_id in unmatched_open
-                 and o.side == leg.side
-                 and o.price == leg.price
-                 and o.leaves_quantity == leg.quantity),
-                None,
-            )
-            if match is not None:
-                unmatched_open.discard(match.order_id)
-            else:
-                legs_to_place.append(leg)
+            desired_sides.add(leg.side)
+            existing = open_by_side.get(leg.side)
 
-        # Anything still unmatched is stale or withdrawn — cancel it.
-        for order in open_orders:
-            if order.order_id in unmatched_open:
-                await self._safe_cancel(order.order_id, why="reconcile_stale_or_withdrawn")
+            if existing is None:
+                await self._place_quote(signal, leg)
+            elif (
+                existing.price == leg.price
+                and existing.leaves_quantity == leg.quantity
+            ):
+                pass  # already correct — no-op, keep queue position
+            elif existing.status == OrderStatus.PENDING_AMEND:
+                pass  # amend already in flight — wait for confirm, retry next tick
+            elif existing.status in amendable:
+                await self._amend_quote(existing, leg)
+            # else PENDING_NEW: too early to amend — leave it alone this tick
 
-        # Place legs that had no matching open order.
-        for leg in legs_to_place:
-            await self._place_quote(signal, leg)
+        # Withdraw: sides no longer desired → cancel whatever is resting there.
+        for side, order in open_by_side.items():
+            if side not in desired_sides:
+                await self._safe_cancel(order.order_id, why="reconcile_withdrawn")
 
     async def _reconcile_sliced(
         self, signal: SignalEvent, sliced_legs: list[tuple[OrderLeg, ExecutionAlgo]]
@@ -615,6 +641,27 @@ class OMSEngine:
         if not await self._safe_publish(Topic.ORDERS, req):
             order.transition_to(OrderStatus.REJECTED, at_ns=self._clock.now_ns())
             order.reject_reason = "dropped: bus backpressure on orders topic"
+
+    async def _amend_quote(self, order: Order, leg: OrderLeg) -> None:
+        """Send an AmendRequest for a resting quote whose price or qty changed."""
+        try:
+            order.transition_to(OrderStatus.PENDING_AMEND, at_ns=self._clock.now_ns())
+        except InvalidStateTransitionError:
+            return  # raced to a terminal state — skip
+        order.pending_amend = (leg.price, leg.quantity)
+        await self._safe_publish(
+            Topic.ORDERS,
+            AmendRequest(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source=self._source,
+                order_id=order.order_id,
+                client_order_id=order.client_order_id,
+                instrument=order.instrument,
+                new_price=leg.price,
+                new_quantity=leg.quantity,
+            ),
+        )
 
     # --- Adoption of pre-existing venue state ----------------------------
 
