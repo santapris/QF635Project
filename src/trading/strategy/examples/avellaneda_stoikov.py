@@ -25,7 +25,10 @@ Parameters (all from TOML config as str → parsed in __init__):
     max_position        : max abs inventory before side suppressed (default 0.5)
     min_vol             : vol floor — prevents zero spread on flat mkt (default 0.5)
     min_price_move_ticks: only re-quote if price moved ≥ N ticks (default 1)
-                          throttles order spam since OMS has no cancel-replace yet
+                          caps amend rate: even though the OMS now does
+                          cancel-replace via amend, re-quoting on every
+                          sub-tick drift floods the venue rate limit and
+                          widens the amend-vs-fill race window
 """
 
 from __future__ import annotations
@@ -76,7 +79,8 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         self._max_position = max_position
         self._min_vol = min_vol
         self._min_price_move_ticks = min_price_move_ticks
-        # Last emitted quote prices — throttle re-quoting if price unchanged
+        # Last emitted quote prices — skip re-quoting until price moves
+        # ≥ min_price_move_ticks, capping amend churn against the venue
         self._last_bid: Decimal | None = None
         self._last_ask: Decimal | None = None
 
