@@ -443,7 +443,7 @@ class OMSEngine:
         sid = signal.strategy_id
         iid = signal.instrument.instrument_id
         amendable = (OrderStatus.ACKNOWLEDGED, OrderStatus.PARTIALLY_FILLED)
-        active = (OrderStatus.PENDING_NEW, *amendable, OrderStatus.PENDING_AMEND)
+        active = (OrderStatus.PENDING_NEW, *amendable, OrderStatus.PENDING_AMEND, OrderStatus.PENDING_CANCEL)
 
         # Collect all resting plain orders for this (strategy, instrument).
         resting: list[Order] = [
@@ -489,8 +489,8 @@ class OMSEngine:
 
             if candidate is None:
                 await self._place_quote(signal, leg)
-            elif candidate.status == OrderStatus.PENDING_AMEND:
-                pass  # amend already in flight — wait for confirm, retry next tick
+            elif candidate.status in (OrderStatus.PENDING_AMEND, OrderStatus.PENDING_CANCEL):
+                pass  # in-flight op — wait for confirm, retry next tick
             elif candidate.status in amendable:
                 await self._amend_quote(candidate, leg)
             # else PENDING_NEW: too early to amend — leave it alone this tick

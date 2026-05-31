@@ -359,3 +359,31 @@ async def test_fill_race_while_pending_amend() -> None:
     assert applied is True
     assert order.status == OrderStatus.PARTIALLY_FILLED
     assert order.cumulative_filled == Decimal("0.05")
+
+
+@pytest.mark.asyncio
+async def test_pending_cancel_order_not_duplicated() -> None:
+    """A PENDING_CANCEL order must block fresh placement on the same side.
+
+    Scenario: a BUY order is being cancelled (cancel in-flight, PENDING_CANCEL).
+    A new signal with a BUY leg arrives before the cancel confirms. Without this
+    guard the reconciler sees no 'active' BUY resting order and places a second
+    BUY — leaving two buys on the venue until the cancel lands.
+    """
+    bus = _CaptureBus()
+    oms = OMSEngine(bus=bus, clock=LiveClock())
+    instr = _instrument()
+
+    # Simulate a BUY order with an in-flight cancel.
+    order = _resting_order(instr, Side.BUY, "50000.00")
+    order.transition_to(OrderStatus.PENDING_CANCEL, at_ns=0)
+    oms._orders[order.order_id] = order
+
+    signal = _signal(instr, "test-strat", _leg(Side.BUY, "50001.00"))
+    await oms._reconcile_immediate(signal, list(signal.legs))
+
+    # No new order should be placed — the PENDING_CANCEL counts as occupying the slot.
+    assert bus.of_type(OrderRequest) == []
+    assert bus.of_type(AmendRequest) == []
+    # And the PENDING_CANCEL order itself should not be cancelled again.
+    assert bus.of_type(CancelRequest) == []

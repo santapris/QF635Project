@@ -43,30 +43,54 @@ order_gateways/
 
 ## State Adoption & Reconciliation
 
-The system treats its in-memory order/position state as a cache that must be
-rebuilt from the venue — never as authoritative — so it can recover mid-trade
-across a restart. `state_bootstrap.py` (`StateBootstrapper`) owns this:
+The system treats its in-memory order/position state as a **cache** that must
+be rebuilt from the venue — never as authoritative — so it can recover
+mid-trade across a restart. `state_bootstrap.py` (`StateBootstrapper`) owns
+this.
 
-**At startup** it fetches `GET /openOrders` and `GET /positionRisk` and:
-- adopts every open order into the OMS via `adopt_order(...)`, attributing by
-  `clientOrderId` (matching orders → their strategy; others → `external`);
-- publishes the venue's net positions verbatim as `VenuePositionSnapshotEvent`
-  (ground truth for the dashboard). It deliberately does **not** synthesize
-  fills into the Position Engine — that would corrupt the fill-derived
-  per-strategy books and PnL.
+### Startup bootstrap
 
-**Periodically** (default 30 s) it re-pulls and reconciles: adopt orders the
-venue reports but we don't track; terminalize locally-open orders the venue no
-longer reports (filled/cancelled during a user-data-stream gap); refresh venue
-positions. This repairs drift from missed WS events.
+Calls `GET /openOrders` per tracked instrument and `GET /positionRisk`
+(futures only):
 
-The older blanket "cancel all stale orders at startup" path is now opt-in
-(`oms.cancel_stale_orders_on_start`, default `False`) — wiping pre-existing
-orders is the opposite of adoption.
+- Adopts every open order into the OMS via `adopt_order(...)`, attributing by
+  `clientOrderId` (orders minted by us → their strategy; others → `external`).
+- Publishes the venue's net positions verbatim as `VenuePositionSnapshotEvent`
+  (ground truth for the dashboard).
 
-`reconciler.py` remains the **balance** reconciler: it compares venue
-balances against our position books and *alerts* on mismatch (it does not
-silently correct).
+Position fills are deliberately **not** synthesized into the PositionEngine —
+that would corrupt the fill-derived per-strategy books and PnL with quantities
+no strategy actually traded. The venue net position row in the dashboard is
+separate from the per-strategy fill-derived rows.
+
+### Periodic resync (default 30 s)
+
+Re-pulls `GET /openOrders` and reconciles in two steps:
+
+1. **Adopt** any venue order we don't track. Adopted orders enter the OMS in
+   the state the venue reports (ACKNOWLEDGED/PARTIALLY_FILLED) and flow
+   through the per-strategy reconciliation loop on the next signal tick —
+   the same matching logic as self-placed orders. The reconciler decides keep
+   (matches a desired leg) or cancel (matches none); there is no separate
+   "orphan cancel" at adoption time.
+
+2. **Terminalize** any locally-open order the venue no longer reports. These
+   disappeared because they filled or were cancelled during a user-data-stream
+   gap. They are stamped `CANCELLED` (best available inference without an
+   extra `GET /order` round-trip).
+
+Both steps are **scoped to instruments whose `GET /openOrders` succeeded** that
+pass. A transient fetch failure contributes nothing to either step — it is
+never treated as "the venue has no orders for this symbol", which would
+terminalize live orders on a network blip.
+
+### Balance reconciler
+
+`reconciler.py` compares venue balances (`GET /account`) against our
+PositionEngine books and **alerts** on mismatch above a configurable threshold.
+It does not auto-correct: silently rewriting positions to match the venue would
+paper over a bug rather than surface it, and a wrong correction can make the
+divergence worse. Operators decide on action.
 
 ## Supported Gateway Types
 
@@ -77,10 +101,23 @@ silently correct).
 
 ## Failure Handling
 
-- Order rejection → publish `OrderRejected`, notify OMS
-- Network timeout → idempotent retry using `client_order_id` for dedup
-- Partial fill → tracked in OMS; gateway publishes each fill event independently
-- Binance `-2011` (cancel received for already-filled order) → handled gracefully in `errors.py`
+- **Logical order rejection** (bad symbol, insufficient balance, filter
+  violation) → `OrderRejected` published; OMS terminalizes the order.
+- **Transport / auth / rate-limit error on placement** → `OrderRejected`
+  published with a distinguishing reason. The order's actual venue status is
+  unknown in this case; the periodic resync will adopt it if the venue accepted
+  it, or leave it terminal if not.
+- **Partial fill** → each fill published independently as `FillEvent`;
+  fill dedup is keyed on `fill_id` inside `Order._applied_fills`.
+- **Cancel on already-terminal order** → Binance `-2011` ("unknown order");
+  the gateway publishes `CancelRejected` and the OMS rolls back to
+  `ACKNOWLEDGED` (order still live). Handled in `errors.py`.
+- **Futures amend that cancels the order** → a GTX/post-only amend whose new
+  price would cross, or a quantity reduced below `executedQty`, causes Binance
+  to cancel the order and return HTTP 200 with `status: CANCELED`. The gateway
+  detects this in the PUT response and publishes `OrderCancelled` (not
+  `OrderAmended`), so the OMS terminalizes correctly and the strategy re-places
+  on the next reconcile tick.
 
 ## Rate Limiting
 

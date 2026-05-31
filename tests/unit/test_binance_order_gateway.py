@@ -380,6 +380,37 @@ async def test_futures_amend_publishes_venue_resulting_values(btc_binance):
     assert amended[0].new_exchange_order_id == "4242"
 
 
+async def test_futures_amend_cancelled_order_publishes_cancel_not_amend(btc_binance):
+    """A GTX amend that would cross is CANCELED by Binance: the PUT returns
+    HTTP 200 with status=CANCELED (not an HTTP error). The gateway must publish
+    OrderCancelled, not OrderAmended — otherwise the OMS tracks a dead order as
+    live at the new price."""
+    from trading.core.events import OrderCancelled
+
+    rest = _FakeREST()
+    rest.responses.append(
+        {"orderId": 4242, "status": "CANCELED", "price": "50001", "origQty": "0.20"}
+    )
+    bus, gw = _futures_gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    amend = AmendRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("test-amend-x"),
+        instrument=btc_binance,
+        side=Side.BUY,
+        new_price=Price(Decimal("50001")),
+        new_quantity=Quantity(Decimal("0.20")),
+    )
+    await bus.publish(Topic.ORDERS, amend)
+
+    published = bus.published_on(Topic.ORDERS)
+    assert not [e for e in published if isinstance(e, OrderAmended)]
+    cancels = [e for e in published if isinstance(e, OrderCancelled)]
+    assert len(cancels) == 1
+    assert str(cancels[0].client_order_id) == "test-amend-x"
+
+
 async def test_order_gateway_format_decimal_no_exponent(btc_binance):
     """Verify quantities like 0.00001 don't get serialized as 1E-5."""
     rest = _FakeREST()

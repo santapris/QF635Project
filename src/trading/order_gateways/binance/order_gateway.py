@@ -309,13 +309,43 @@ class BinanceOrderGateway(AbstractOrderGateway):
 
         new_exchange_id = ExchangeOrderId(str(resp["orderId"])) if "orderId" in resp else None
 
+        # A PUT amend can return HTTP 200 yet report the order as *terminal*.
+        # Binance's modify endpoint cancels the order (rather than rejecting the
+        # amend with an HTTP error) in two documented cases:
+        #   - the order is GTX/post-only and the new price would cross, or
+        #   - the order is partially filled and new_quantity <= executedQty.
+        # In both, the resulting status is CANCELED/EXPIRED — there is no longer
+        # a resting order. Publishing OrderAmended here would leave the OMS
+        # tracking a dead order as live at the new price (a tracked-but-gone
+        # desync that the strategy then re-amends forever). Detect the terminal
+        # status and publish OrderCancelled instead, so the OMS terminalizes it
+        # and the strategy re-places cleanly on the next reconcile tick.
+        venue_status = str(resp.get("status", "")).upper()
+        if venue_status in ("CANCELED", "EXPIRED", "REJECTED"):
+            _log.info(
+                "binance_futures_amend_cancelled_order",
+                order_id=req.order_id,
+                client_order_id=req.client_order_id,
+                venue_status=venue_status,
+            )
+            await self._safe_publish(
+                Topic.ORDERS,
+                OrderCancelled(
+                    ts_event=self._clock.now_ns(),
+                    ts_ingest=self._clock.now_ns(),
+                    source=self.venue,
+                    order_id=req.order_id,
+                    client_order_id=req.client_order_id,
+                    reason=f"amend cancelled order: venue status {venue_status}",
+                ),
+            )
+            return
+
         # Publish the venue's *actual* resulting price/qty, not what we asked
         # for. The PUT can clamp or partially apply (e.g. a quantity change
-        # against an already-partially-filled order), and a GTX amend that
-        # would cross is silently adjusted rather than rejected on some paths.
-        # Trusting req.new_* here is exactly how local state drifts from the
-        # venue and orphans accumulate. Fall back to the requested value only
-        # if the response omits the field.
+        # against an already-partially-filled order). Trusting req.new_* here is
+        # how local state drifts from the venue. Fall back to the requested
+        # value only if the response omits the field.
         venue_price = resp.get("price")
         venue_qty = resp.get("origQty")
         applied_price = (

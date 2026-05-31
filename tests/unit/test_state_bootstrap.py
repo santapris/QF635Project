@@ -15,7 +15,6 @@ from trading.core import VenuePositionSnapshotEvent
 from trading.core.types import OrderType, Side, TimeInForce
 from trading.event_bus.base import Topic
 from trading.oms import OMSEngine
-from trading.oms.engine import EXTERNAL_STRATEGY_ID
 from trading.order_gateways.binance.config import BinanceConfig
 from trading.order_gateways.binance.state_bootstrap import StateBootstrapper
 from trading.order_gateways.binance.symbols import SymbolMapper
@@ -183,10 +182,11 @@ def _cancel_requests(bus: _CaptureBus) -> list:
             if t == Topic.ORDERS and isinstance(e, CancelRequest)]
 
 
-async def test_resync_cancels_strategy_owned_orphan(clock, btc) -> None:
-    """A strategy-owned venue order the OMS was not tracking is an orphan
-    (e.g. left by a futures amend that cancel-replaced). Resync adopts it then
-    cancels it so it can't accumulate as a stale resting quote."""
+async def test_resync_adopts_untracked_order_verbatim_no_cancel(clock, btc) -> None:
+    """Resync adopts an untracked venue order into the OMS verbatim and does
+    NOT cancel it. Deciding whether the order should rest is the per-strategy
+    reconciliation loop's job (it matches against desired legs), not the
+    resync's — adopted and self-placed orders flow through the same matching."""
     oms_bus = _CaptureBus()
     oms = OMSEngine(bus=oms_bus, clock=clock)
     rest = _FakeREST({
@@ -199,36 +199,19 @@ async def test_resync_cancels_strategy_owned_orphan(clock, btc) -> None:
     )
     await boot._resync_once()
 
-    cancels = _cancel_requests(oms_bus)
-    assert len(cancels) == 1
-    assert str(cancels[0].client_order_id) == "mm-0123456789ab"
-
-
-async def test_resync_does_not_cancel_external_orphan(clock, btc) -> None:
-    """An order whose coid doesn't match our minting scheme is EXTERNAL — a
-    human/other-system order we don't own. Adopt it, but never cancel it."""
-    oms_bus = _CaptureBus()
-    oms = OMSEngine(bus=oms_bus, clock=clock)
-    rest = _FakeREST({
-        ("GET", "/openOrders"): [_open_order_row("someones-manual-order")],
-        ("GET", "/fapi/v2/positionRisk"): [],
-    })
-    boot = StateBootstrapper(
-        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
-        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
-    )
-    await boot._resync_once()
-
+    # No cancel issued by the resync itself.
     assert _cancel_requests(oms_bus) == []
-    # Still adopted (tracked) as an EXTERNAL order.
+    # Order is tracked in the state the venue reported.
     adopted = list(oms.open_orders())
     assert len(adopted) == 1
-    assert adopted[0].strategy_id == EXTERNAL_STRATEGY_ID
+    assert str(adopted[0].client_order_id) == "mm-0123456789ab"
+    assert adopted[0].side is Side.BUY
+    assert adopted[0].price == Decimal("70000")
 
 
-async def test_resync_does_not_recancel_already_tracked_order(clock, btc) -> None:
-    """An order the OMS already tracks (placed normally, or adopted on a prior
-    pass) is not 'newly adopted' and must not be cancelled by resync."""
+async def test_resync_adopt_is_idempotent_across_passes(clock, btc) -> None:
+    """Re-running resync against the same venue order does not duplicate it or
+    cancel it — adoption is idempotent on client_order_id."""
     oms_bus = _CaptureBus()
     oms = OMSEngine(bus=oms_bus, clock=clock)
     rest = _FakeREST({
@@ -239,13 +222,12 @@ async def test_resync_does_not_recancel_already_tracked_order(clock, btc) -> Non
         bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
         oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
     )
-    # First pass adopts + cancels the orphan. Second pass: the order is now
-    # tracked (PENDING_CANCEL), so it is no longer "newly adopted".
     await boot._resync_once()
     oms_bus.published.clear()
     await boot._resync_once()
 
     assert _cancel_requests(oms_bus) == []
+    assert len(list(oms.open_orders())) == 1
 
 
 async def test_resync_skips_terminalize_on_failed_fetch(clock, btc) -> None:
