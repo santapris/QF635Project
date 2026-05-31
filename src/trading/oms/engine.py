@@ -35,6 +35,7 @@ from uuid import uuid4
 
 from ..core.clock import Clock
 from ..core.events import (
+    AmendRejected,
     AmendRequest,
     BaseEvent,
     CancelRejected,
@@ -241,6 +242,8 @@ class OMSEngine:
             await self._publish_open_orders()  # reject removes working exposure
         elif isinstance(event, CancelRejected):
             await self._handle_cancel_rejected(event)
+        elif isinstance(event, AmendRejected):
+            await self._handle_amend_rejected(event)
         elif isinstance(event, OrderCancelled):
             await self._handle_cancel(event)
             await self._publish_open_orders()  # cancel removes working exposure
@@ -355,9 +358,44 @@ class OMSEngine:
         except InvalidStateTransitionError:
             return
 
+    async def _handle_amend_rejected(self, event: AmendRejected) -> None:
+        """Roll a PENDING_AMEND order back to ACKNOWLEDGED.
+
+        The amend was rejected by the venue, meaning the order is still live at
+        its current price/qty. Rolling back to ACKNOWLEDGED lets the reconciler
+        see it as a resting order on the next tick and retry or cancel it.
+        """
+        order = self._orders.get(event.order_id)
+        if order is None:
+            return
+        _log.warning(
+            "amend_rejected_rolling_back_to_acknowledged",
+            order_id=str(event.order_id),
+            client_order_id=str(event.client_order_id),
+            reason=event.reason,
+        )
+        order.pending_amend = None
+        try:
+            order.transition_to(OrderStatus.ACKNOWLEDGED, at_ns=self._clock.now_ns())
+        except InvalidStateTransitionError:
+            return
+
     async def _handle_amend(self, event: OrderAmended) -> None:
         order = self._orders.get(event.order_id)
         if order is None:
+            return
+        if order.status is OrderStatus.PENDING_CANCEL:
+            # Amend response arrived after we already queued a cancel for this
+            # order — the order is dying and must not be revived.  Drop the
+            # stale amend on the floor and let the cancel response terminalize
+            # the order normally.  See also _reconcile_immediate which guards
+            # against cancelling PENDING_AMEND orders during un-matched sweep.
+            _log.info(
+                "amend_response_stale_order_pending_cancel",
+                order_id=str(order.order_id),
+                client_order_id=str(order.client_order_id),
+            )
+            order.pending_amend = None
             return
         try:
             order.transition_to(OrderStatus.ACKNOWLEDGED, at_ns=event.ts_event)
@@ -496,8 +534,13 @@ class OMSEngine:
             # else PENDING_NEW: too early to amend — leave it alone this tick
 
         # Cancel every resting order that was not matched to a desired leg.
+        # PENDING_AMEND orders are mid-amend from a recent reconcile tick;
+        # cancelling them here would let the amend response revive the order
+        # after the cancel (a transition from PENDING_CANCEL back to
+        # ACKNOWLEDGED — see _handle_amend guard for the other half of this
+        # race).  Skip them and let the next tick handle the conflict.
         for order in resting:
-            if order.order_id not in matched:
+            if order.order_id not in matched and order.status is not OrderStatus.PENDING_AMEND:
                 await self._safe_cancel(order.order_id, why="reconcile_withdrawn")
 
     async def _reconcile_sliced(
@@ -767,6 +810,12 @@ class OMSEngine:
         """
         existing = self._coid_to_order_id.get(client_order_id)
         if existing is not None:
+            self._refresh_adopted_order(
+                existing,
+                quantity=quantity,
+                cumulative_filled=cumulative_filled,
+                price=price,
+            )
             return existing
 
         strategy_id = strategy_id_from_client_order_id(str(client_order_id))
@@ -820,6 +869,41 @@ class OMSEngine:
         await self._publish_open_orders()
         return order_id
 
+    def _refresh_adopted_order(
+        self,
+        order_id: OrderId,
+        *,
+        quantity: Quantity,
+        cumulative_filled: Quantity,
+        price: Price | None,
+    ) -> None:
+        """Reconcile a re-adopted order's fields to a fresh venue snapshot.
+
+        ``adopt_order`` is idempotent on client_order_id, so a periodic resync
+        re-adopts orders we already track. Returning early would freeze the
+        order at the state it was first adopted in — a partial fill that grew
+        between resyncs would never update ``cumulative_filled``/``leaves``,
+        and the resync would silently fail to repair partial-fill drift on
+        already-tracked orders (half its stated job).
+
+        We only ratchet ``cumulative_filled`` *forward* (the venue is
+        authoritative, but the user-data stream may have already advanced it
+        past this snapshot; never rewind). ``price``/``quantity`` are taken
+        verbatim — an external party may have amended on the venue. We do not
+        synthesize a FillEvent: that would risk double-counting against the
+        user-data stream and corrupt per-strategy books, exactly what
+        adoption deliberately avoids. We only correct exposure accounting.
+        """
+        order = self._orders.get(order_id)
+        if order is None or order.is_terminal:
+            return
+        if cumulative_filled > order.cumulative_filled:
+            order.cumulative_filled = cumulative_filled
+        if quantity != order.quantity:
+            order.quantity = quantity
+        if price is not None and price != order.price:
+            order.price = price
+
     async def cancel_order(self, order_id: OrderId) -> None:
         """Send a CancelRequest for a single order."""
         order = self._orders.get(order_id)
@@ -842,6 +926,45 @@ class OMSEngine:
                 instrument=order.instrument,
             ),
         )
+
+    async def terminalize_from_venue(
+        self,
+        order_id: OrderId,
+        *,
+        status: OrderStatus,
+        cumulative_filled: Quantity | None = None,
+    ) -> None:
+        """Drive a locally-open order to a venue-reported terminal state.
+
+        Used by the resync when an order has dropped off the venue's open-order
+        list: rather than assuming CANCELLED, the caller queries the venue for
+        the order's *actual* terminal status and passes it here. This avoids
+        recording a filled order as cancelled (and then swallowing the fill on
+        the terminal-order path in ``_on_fill``).
+
+        ``cumulative_filled``, when given, ratchets the order's fill total
+        forward to the venue's figure before terminalizing, so a fully- or
+        partially-filled order's leaves/exposure are correct on the way out.
+        We do not emit a FillEvent (no double-count against the user-data
+        stream); we only correct the order's own accounting.
+        """
+        order = self._orders.get(order_id)
+        if order is None or order.is_terminal:
+            return
+        if not status.is_terminal:
+            _log.warning(
+                "terminalize_from_venue_non_terminal_status_ignored",
+                order_id=str(order_id), status=status.value,
+            )
+            return
+        if cumulative_filled is not None and cumulative_filled > order.cumulative_filled:
+            order.cumulative_filled = cumulative_filled
+        try:
+            order.transition_to(status, at_ns=self._clock.now_ns())
+        except InvalidStateTransitionError:
+            # Raced the user-data stream to a terminal state. Benign.
+            return
+        await self._publish_open_orders()
 
     # --- Read API --------------------------------------------------------
 

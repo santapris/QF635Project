@@ -36,6 +36,7 @@ from typing import Any
 
 from ...core.clock import Clock
 from ...core.events import (
+    AmendRejected,
     AmendRequest,
     BaseEvent,
     CancelRejected,
@@ -296,6 +297,37 @@ class BinanceOrderGateway(AbstractOrderGateway):
                 params=params, signed=True, weight=_W_NEW_ORDER,
             )
         except OrderError as exc:
+            code = exc.context.get("code")
+            # -5027: already at requested price/qty — no-op, order still lives.
+            if code == -5027:
+                _log.debug(
+                    "binance_futures_amend_noop",
+                    order_id=req.order_id, reason=exc.message,
+                )
+                return
+            # -2013: order no longer exists on the venue (filled or cancelled
+            # between our request and the PUT landing). Treat as a cancel so
+            # the OMS terminalizes it and the strategy re-places cleanly.
+            if code == -2013:
+                _log.info(
+                    "binance_futures_amend_order_gone",
+                    order_id=req.order_id, reason=exc.message,
+                )
+                await self._safe_publish(
+                    Topic.ORDERS,
+                    OrderCancelled(
+                        ts_event=self._clock.now_ns(),
+                        ts_ingest=self._clock.now_ns(),
+                        source=self.venue,
+                        order_id=req.order_id,
+                        client_order_id=req.client_order_id,
+                        reason=f"amend revealed order gone: {exc.message}",
+                    ),
+                )
+                return
+            # All other errors: the amend was rejected but the order is still
+            # live at its current price/qty. Roll back PENDING_AMEND →
+            # ACKNOWLEDGED so the reconciler can retry or cancel next tick.
             _log.info(
                 "binance_futures_amend_rejected",
                 order_id=req.order_id, reason=exc.message,
@@ -382,13 +414,24 @@ class BinanceOrderGateway(AbstractOrderGateway):
                 signed=True, weight=_W_CANCEL_ORDER,
             )
         except OrderError as exc:
-            # Already gone (filled or cancelled) — user-data stream delivers the
-            # real event. Reject the amend so the OMS exits PENDING_AMEND cleanly.
+            # Already gone (filled or cancelled) — user-data stream will deliver
+            # the canonical fill/cancel event. Emit OrderCancelled so the OMS
+            # exits PENDING_AMEND cleanly without waiting for the WS event.
             _log.info(
                 "binance_spot_amend_cancel_order_already_done",
                 order_id=req.order_id, reason=exc.message,
             )
-            await self._publish_amend_reject(req, f"cancel step failed: {exc.message}")
+            await self._safe_publish(
+                Topic.ORDERS,
+                OrderCancelled(
+                    ts_event=self._clock.now_ns(),
+                    ts_ingest=self._clock.now_ns(),
+                    source=self.venue,
+                    order_id=req.order_id,
+                    client_order_id=req.client_order_id,
+                    reason=f"amend revealed order gone: {exc.message}",
+                ),
+            )
             return
         except OrderGatewayError as exc:
             _log.exception("binance_spot_amend_cancel_transport_error", order_id=req.order_id)
@@ -458,10 +501,9 @@ class BinanceOrderGateway(AbstractOrderGateway):
         )
 
     async def _publish_amend_reject(self, req: AmendRequest, reason: str) -> None:
-        """Signal that the cancel step of a cancel-replace failed."""
         await self._safe_publish(
             Topic.ORDERS,
-            OrderRejected(
+            AmendRejected(
                 ts_event=self._clock.now_ns(),
                 ts_ingest=self._clock.now_ns(),
                 source=self.venue,

@@ -411,6 +411,33 @@ async def test_futures_amend_cancelled_order_publishes_cancel_not_amend(btc_bina
     assert str(cancels[0].client_order_id) == "test-amend-x"
 
 
+async def test_futures_amend_5027_noop_leaves_order_live(btc_binance):
+    """Binance -5027 ('No need to modify the order') means the order is already
+    at the requested price/qty — the amend is a no-op, not a failure. The gateway
+    must publish nothing (no OrderRejected, no OrderAmended) so the OMS keeps the
+    order in its current live state rather than terminalizing it."""
+    rest = _FakeREST()
+    rest.responses.append(
+        OrderError("binance error -5027: No need to modify the order.", code=-5027)
+    )
+    bus, gw = _futures_gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    amend = AmendRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("test-amend-noop"),
+        instrument=btc_binance,
+        side=Side.BUY,
+        new_price=Price(Decimal("50000")),
+        new_quantity=Quantity(Decimal("0.10")),
+    )
+    await bus.publish(Topic.ORDERS, amend)
+
+    published = bus.published_on(Topic.ORDERS)
+    assert not [e for e in published if isinstance(e, OrderRejected)]
+    assert not [e for e in published if isinstance(e, OrderAmended)]
+
+
 async def test_order_gateway_format_decimal_no_exponent(btc_binance):
     """Verify quantities like 0.00001 don't get serialized as 1E-5."""
     rest = _FakeREST()

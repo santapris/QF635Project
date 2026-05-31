@@ -384,6 +384,14 @@ class CancelRejected(BaseEvent):
     reason: str
 
 
+class AmendRejected(BaseEvent):
+    """Amend request was rejected by the venue — the order is still live at its current price/qty."""
+    event_type: Literal["amend_rejected"] = "amend_rejected"
+    order_id: OrderId
+    client_order_id: ClientOrderId
+    reason: str
+
+
 class OrderAmended(BaseEvent):
     event_type: Literal["order_amended"] = "order_amended"
     order_id: OrderId
@@ -588,6 +596,7 @@ Event = Annotated[
 __all__ = [
     "AccountBalance",
     "AccountSnapshotEvent",
+    "AmendRejected",
     "AmendRequest",
     "ApprovedLeg",
     "BaseEvent",

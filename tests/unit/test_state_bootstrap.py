@@ -259,3 +259,190 @@ async def test_resync_skips_terminalize_on_failed_fetch(clock, btc) -> None:
 
     # Order survived — not terminalized despite the failed fetch.
     assert len(list(oms.open_orders())) == 1
+
+
+class _GoneREST:
+    """openOrders no longer lists the order; /allOrders returns ``all_orders``.
+
+    ``all_orders`` may be a list of rows or an Exception to simulate a query
+    failure. Tracks how many times /allOrders was hit so tests can assert the
+    staleness guard defers the (weighted) query until the order is persistently
+    gone.
+    """
+    def __init__(self, all_orders):
+        self._all_orders = all_orders
+        self.calls: list[tuple[str, str]] = []
+        self.all_orders_calls = 0
+
+    async def request(self, method, path, *, params=None, signed=False, weight=1.0):
+        self.calls.append((method, path))
+        if "openOrders" in path:
+            return []
+        if path.endswith("/allOrders"):
+            self.all_orders_calls += 1
+            if isinstance(self._all_orders, Exception):
+                raise self._all_orders
+            return self._all_orders
+        return []  # positionRisk
+
+
+async def _seed_open_order(oms, btc, *, coid="mm-0123456789ab", filled="0", qty="0.01"):
+    await oms.adopt_order(
+        instrument=btc, client_order_id=coid, side=Side.BUY,
+        order_type=OrderType.LIMIT, quantity=Decimal(qty),
+        cumulative_filled=Decimal(filled), price=Decimal("70000"),
+        time_in_force=TimeInForce.GTC, exchange_order_id="999",
+    )
+
+
+def _all_orders_row(coid: str, *, status: str, executed: str) -> dict:
+    return {"clientOrderId": coid, "orderId": "999", "status": status,
+            "executedQty": executed}
+
+
+async def _resync_until_gone_threshold(boot) -> None:
+    """Run resync enough passes to clear the staleness guard."""
+    from trading.order_gateways.binance.state_bootstrap import _GONE_THRESHOLD
+    for _ in range(_GONE_THRESHOLD):
+        await boot._resync_once()
+
+
+async def test_resync_gone_filled_terminalizes_as_filled(clock, btc) -> None:
+    """An order absent from /openOrders because it FILLED is recorded FILLED
+    (not CANCELLED), with cumulative_filled reconciled to the venue figure."""
+    oms = OMSEngine(bus=_NullBus(), clock=clock)
+    await _seed_open_order(oms, btc)
+    order = next(iter(oms.open_orders()))
+
+    rest = _GoneREST([_all_orders_row("mm-0123456789ab", status="FILLED", executed="0.01")])
+    boot = StateBootstrapper(
+        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
+        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
+    )
+    await _resync_until_gone_threshold(boot)
+
+    from trading.core.types import OrderStatus
+    assert order.status is OrderStatus.FILLED
+    assert order.cumulative_filled == Decimal("0.01")
+    assert list(oms.open_orders()) == []
+
+
+async def test_resync_gone_cancelled_terminalizes_as_cancelled(clock, btc) -> None:
+    oms = OMSEngine(bus=_NullBus(), clock=clock)
+    await _seed_open_order(oms, btc)
+    order = next(iter(oms.open_orders()))
+
+    rest = _GoneREST([_all_orders_row("mm-0123456789ab", status="CANCELED", executed="0")])
+    boot = StateBootstrapper(
+        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
+        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
+    )
+    await _resync_until_gone_threshold(boot)
+
+    from trading.core.types import OrderStatus
+    assert order.status is OrderStatus.CANCELLED
+
+
+async def test_resync_staleness_guard_defers_query_until_persistent(clock, btc) -> None:
+    """One missing snapshot must NOT trigger a (weighted) /allOrders query or
+    terminalize. Only persistent absence does — the stream is the primary path."""
+    oms = OMSEngine(bus=_NullBus(), clock=clock)
+    await _seed_open_order(oms, btc)
+
+    rest = _GoneREST([_all_orders_row("mm-0123456789ab", status="FILLED", executed="0.01")])
+    boot = StateBootstrapper(
+        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
+        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
+    )
+    # First pass: gone once, below threshold — no query, order still open.
+    await boot._resync_once()
+    assert rest.all_orders_calls == 0
+    assert len(list(oms.open_orders())) == 1
+
+
+async def test_resync_seeing_order_again_resets_gone_counter(clock, btc) -> None:
+    """An order that reappears in /openOrders resets the gone counter, so an
+    intermittent absence never accumulates to the threshold."""
+    oms = OMSEngine(bus=_NullBus(), clock=clock)
+    await _seed_open_order(oms, btc)
+
+    # /openOrders alternates: gone, then present, then gone. Never two in a row.
+    class _FlappingREST(_GoneREST):
+        def __init__(self, all_orders):
+            super().__init__(all_orders)
+            self._present = False
+        async def request(self, method, path, *, params=None, signed=False, weight=1.0):
+            if "openOrders" in path:
+                self.calls.append((method, path))
+                self._present = not self._present
+                return [_open_order_row("mm-0123456789ab")] if self._present else []
+            return await super().request(method, path, params=params, signed=signed, weight=weight)
+
+    rest = _FlappingREST([_all_orders_row("mm-0123456789ab", status="FILLED", executed="0.01")])
+    boot = StateBootstrapper(
+        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
+        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
+    )
+    for _ in range(6):
+        await boot._resync_once()
+
+    assert rest.all_orders_calls == 0
+    assert len(list(oms.open_orders())) == 1
+
+
+async def test_resync_gone_but_query_fails_leaves_order_open(clock, btc) -> None:
+    """If the /allOrders query fails, we cannot know why it's gone — leave it
+    open and retry next pass rather than terminalizing on a guess."""
+    oms = OMSEngine(bus=_NullBus(), clock=clock)
+    await _seed_open_order(oms, btc)
+
+    rest = _GoneREST(RuntimeError("simulated query failure"))
+    boot = StateBootstrapper(
+        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
+        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
+    )
+    await _resync_until_gone_threshold(boot)
+
+    assert rest.all_orders_calls >= 1  # the guard cleared; query was attempted
+    assert len(list(oms.open_orders())) == 1
+
+
+async def test_resync_gone_but_venue_reports_live_leaves_order_open(clock, btc) -> None:
+    """Absent from /openOrders pages but /allOrders still reports it NEW —
+    a non-terminal status must not terminalize the order."""
+    oms = OMSEngine(bus=_NullBus(), clock=clock)
+    await _seed_open_order(oms, btc)
+
+    rest = _GoneREST([_all_orders_row("mm-0123456789ab", status="NEW", executed="0")])
+    boot = StateBootstrapper(
+        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
+        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
+    )
+    await _resync_until_gone_threshold(boot)
+
+    assert len(list(oms.open_orders())) == 1
+
+
+async def test_resync_readopt_updates_cumulative_filled(clock, btc) -> None:
+    """A partial fill that grows between resyncs is picked up on re-adoption,
+    so leaves/exposure stop drifting — the resync's repair half actually works."""
+    oms = OMSEngine(bus=_NullBus(), clock=clock)
+    await _seed_open_order(oms, btc, filled="0")
+    order = next(iter(oms.open_orders()))
+    assert order.cumulative_filled == Decimal("0")
+
+    # Venue now reports the order still open but 0.004 filled.
+    row = _open_order_row("mm-0123456789ab")
+    row["executedQty"] = "0.004"
+    rest = _FakeREST({
+        ("GET", "/openOrders"): [row],
+        ("GET", "/fapi/v2/positionRisk"): [],
+    })
+    boot = StateBootstrapper(
+        bus=_CaptureBus(), clock=clock, config=_futures_config(), rest=rest,
+        oms=oms, symbols=SymbolMapper([btc]), tracked_instruments=[btc],
+    )
+    await boot._resync_once()
+
+    assert order.cumulative_filled == Decimal("0.004")
+    assert order.leaves_quantity == Decimal("0.006")

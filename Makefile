@@ -1,3 +1,5 @@
+SHELL := /bin/bash
+
 .PHONY: install install-dev install-kafka test test-unit test-integration lint format typecheck clean backtest run-paper run-testnet run-stage1 run-stage2 run-stage3 run-stage4 help
 
 PYTHON ?= python3
@@ -57,7 +59,8 @@ run-paper:
 	$(PYTHON) -m trading.runners.run_live --config configs/paper_example.toml
 
 run-testnet:
-	$(PYTHON) -m trading.runners.examples.binance_testnet
+	@mkdir -p tmp
+	$(PYTHON) -m trading.runners.examples.binance_testnet 2>&1 | tee >(sed 's/\x1b\[[0-9;]*m//g' > tmp/run_$$(date -u +%Y%m%dT%H%M%S).log)
 
 run-stage1:
 	$(PYTHON) -m trading.runners.examples.stage1_market_data
