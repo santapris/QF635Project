@@ -16,6 +16,7 @@ from trading.core import (
     OpenOrdersSnapshotEvent,
     OrderLeg,
     OrderType,
+    PositionUpdateEvent,
     Side,
     SignalEvent,
     TimeInForce,
@@ -162,8 +163,16 @@ def _signal(clock, btc, strategy_id, qty, side=Side.BUY):
     )
 
 
-def test_max_position_counts_working_buy(clock, btc, strategy_id) -> None:
-    """Confirmed 0, but 0.8 working buy against a cap of 1.0 leaves 0.2 headroom."""
+def test_max_position_ignores_working_orders_snapshot_semantics(
+    clock, btc, strategy_id
+) -> None:
+    """A signal is the strategy's full desired resting state, so MaxPosition
+    does NOT count working orders against the cap — the OMS reconciler drives
+    resting orders to the signal's legs (match-or-amend-or-cancel). Counting
+    working caused a place/ack/cancel thrash: a re-quote was rejected because
+    its own resting order consumed the cap, the OMS cancelled it as withdrawn,
+    and the cycle repeated. Here a 0.8 working buy must NOT clamp a fresh 0.5
+    desired buy against a flat position and a 1.0 cap."""
     state = RiskState(clock=clock)
     state.apply_open_orders_snapshot(_snapshot(strategy_id, btc, buy="0.8"))
     rule = MaxPositionRule(max_long=Decimal("1.0"), max_short=Decimal("1.0"))
@@ -171,35 +180,70 @@ def test_max_position_counts_working_buy(clock, btc, strategy_id) -> None:
     sig = _signal(clock, btc, strategy_id, "0.5")
     result = rule.evaluate(sig, sig.legs[0], state)
     assert result.approved
-    assert result.approved_quantity == Decimal("0.2")  # clamped to headroom
+    assert result.approved_quantity is None  # full size — working ignored
 
 
-def test_max_position_rejects_when_working_fills_cap(clock, btc, strategy_id) -> None:
+def test_max_position_rejects_on_confirmed_position_not_working(
+    clock, btc, strategy_id
+) -> None:
+    """The cap is enforced against *confirmed* position (plus same-signal legs),
+    not working orders. A confirmed long at the cap rejects further buys; a
+    working order alone does not."""
     state = RiskState(clock=clock)
-    state.apply_open_orders_snapshot(_snapshot(strategy_id, btc, buy="1.0"))
     rule = MaxPositionRule(max_long=Decimal("1.0"), max_short=Decimal("1.0"))
 
+    # Working alone does not reject (it's the desired state being reconciled).
+    state.apply_open_orders_snapshot(_snapshot(strategy_id, btc, buy="1.0"))
     sig = _signal(clock, btc, strategy_id, "0.5")
-    result = rule.evaluate(sig, sig.legs[0], state)
-    assert not result.approved
+    assert rule.evaluate(sig, sig.legs[0], state).approved
+
+    # A confirmed fill to the cap does reject.
+    state.apply_position_update(PositionUpdateEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="t",
+        strategy_id=strategy_id, instrument=btc, quantity=Decimal("1.0"),
+        average_entry_price=Decimal("50000"), realized_pnl=Decimal(0),
+        unrealized_pnl=Decimal(0), mark_price=Decimal("50000"),
+    ))
+    assert not rule.evaluate(sig, sig.legs[0], state).approved
 
 
-def test_double_approve_bug_is_fixed(clock, btc, strategy_id) -> None:
-    """The original hole: two 1.0 buys both approved against a 1.0 cap because
-    risk only saw confirmed fills. With working-order tracking the second is
-    rejected once the first is in flight."""
-    state = RiskState(clock=clock)
-    rule = MaxPositionRule(max_long=Decimal("1.0"), max_short=Decimal("1.0"))
+async def test_independent_same_side_signals_do_not_double_place_at_oms(
+    clock, btc, strategy_id
+) -> None:
+    """The double-approve hole is closed structurally by the OMS reconciler,
+    not by counting working orders in risk. Two independent single-leg buy
+    signals collapse to ONE resting order: the second signal's reconcile sees
+    the first's in-flight (PENDING_NEW) order as a same-side match and leaves
+    it alone rather than placing a second. (A strategy that genuinely wants two
+    resting orders sends two legs in one signal — a ladder — which MaxPosition
+    bounds by summing siblings.)"""
+    from trading.core.events import OrderRequest
+    from trading.event_bus.base import Topic
+    from trading.oms import OMSEngine
 
-    # First signal: nothing working yet, fully approved.
-    sig1 = _signal(clock, btc, strategy_id, "1.0")
-    r1 = rule.evaluate(sig1, sig1.legs[0], state)
-    assert r1.approved and r1.approved_quantity is None  # full size
+    published: list = []
 
-    # OMS places it; working exposure now reflects the resting buy.
-    state.apply_open_orders_snapshot(_snapshot(strategy_id, btc, buy="1.0"))
+    class _Bus:
+        async def publish(self, topic, event):
+            published.append((topic, event))
+        async def subscribe(self, *a): pass
+        async def subscribe_many(self, *a): pass
+        async def start(self): pass
+        async def stop(self): pass
 
-    # Second identical signal: now rejected, not silently approved.
-    sig2 = _signal(clock, btc, strategy_id, "1.0")
-    r2 = rule.evaluate(sig2, sig2.legs[0], state)
-    assert not r2.approved
+    oms = OMSEngine(bus=_Bus(), clock=clock)
+    leg = OrderLeg(side=Side.BUY, quantity=Decimal("1.0"), price=Decimal("50000"),
+                   order_type=OrderType.LIMIT, time_in_force=TimeInForce.GTC)
+    sig = SignalEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="t",
+        strategy_id=strategy_id, instrument=btc, legs=(leg,),
+    )
+    # Two identical signals back-to-back, before any ack lands.
+    await oms._reconcile_quotes(sig)
+    await oms._reconcile_quotes(sig)
+
+    placed = sum(
+        1 for t, e in published
+        if t == Topic.ORDERS and isinstance(e, OrderRequest)
+    )
+    assert placed == 1  # second signal absorbed by same-side match, not placed

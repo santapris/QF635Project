@@ -173,16 +173,37 @@ class OrderLeg(BaseModel):
 class SignalEvent(BaseEvent):
     """A strategy's complete desired order state for one instrument.
 
+    SIGNAL-AS-SNAPSHOT CONTRACT (read this before touching risk or OMS).
+
     ``legs`` is the full set of orders the strategy wants resting on the
-    exchange for this instrument right now. The OMS treats this as final
-    state — it reconciles open orders against the legs tuple and:
+    exchange for this instrument *right now* — it is a declaration of desired
+    end-state, NOT an increment on top of what is already working. Each new
+    signal supersedes the previous one for that (strategy, instrument). The OMS
+    treats this as final state and reconciles open orders against the legs:
 
     - Places legs that have no matching open order.
     - Cancels open orders that have no matching leg (strategy withdrew them).
     - Leaves open orders whose leg is unchanged (preserves queue position).
-    - Cancel-replaces open orders whose price or size changed.
+    - Amends / cancel-replaces open orders whose price or size changed.
 
     An empty ``legs`` tuple means "cancel everything for this instrument."
+
+    Two downstream components depend on this contract; both are written to it
+    and both break subtly if a strategy instead emits *incremental* signals
+    (separate "add N" signals meant to accumulate):
+
+    1. OMS reconciler (oms/engine.py ``_reconcile_immediate``). Because each
+       signal is the full picture, the reconciler matches desired legs against
+       all resting orders for the (strategy, instrument), including in-flight
+       ones, and cancels any resting order not matched to a leg. A strategy that
+       wants several orders resting at once expresses that as several legs in
+       one signal (a ladder), not as separate signals.
+
+    2. MaxPosition risk rule (risk/rules/max_position.py). It caps against
+       confirmed position plus the same-side legs *in this signal*, and
+       deliberately does NOT add working-order exposure on top — the working
+       orders are the previous snapshot this signal supersedes, so counting both
+       double-counts a re-quote against the order it replaces.
 
     ``atomic`` controls how risk handles partial rejection:
 

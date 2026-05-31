@@ -30,6 +30,16 @@ Composition of rule results (per signal):
 The engine processes signals serially per coroutine — concurrent
 signal handling would race on state updates. The bus's per-subscriber
 queue gives us that serialisation for free.
+
+Signal-as-snapshot (see :class:`SignalEvent`): a signal is a strategy's full
+desired resting state, not an increment. Rules see the whole ``SignalEvent``
+plus the leg under evaluation, so a rule that bounds *aggregate* exposure (e.g.
+MaxPosition) reasons about confirmed position plus the same-side legs in this
+signal — it does not add already-working orders, because those are the prior
+snapshot this signal supersedes and the OMS will reconcile them away. The
+``positions`` / ``fills`` subscriptions feed confirmed position into state; the
+``open_orders`` subscription feeds working exposure into state for any rule that
+needs it, though the built-in MaxPosition deliberately does not.
 """
 
 from __future__ import annotations

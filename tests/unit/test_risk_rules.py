@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 
 from trading.core import (
+    OpenOrdersSnapshotEvent,
     OrderLeg,
     OrderType,
     PositionUpdateEvent,
@@ -14,6 +15,7 @@ from trading.core import (
     Side,
     SignalEvent,
     TimeInForce,
+    WorkingExposure,
 )
 from trading.risk import RiskState
 from trading.risk.rules import (
@@ -59,6 +61,89 @@ def test_max_position_clamps_to_headroom(clock, btc, strategy_id) -> None:
     result = rule.evaluate(sig, sig.legs[0], state)
     assert result.approved
     assert result.approved_quantity == Decimal("2")
+
+
+def _set_working(state, strategy_id, btc, *, buy="0", sell="0") -> None:
+    state.apply_open_orders_snapshot(OpenOrdersSnapshotEvent(
+        ts_event=0, ts_ingest=0, source="t",
+        exposures=(WorkingExposure(
+            strategy_id=strategy_id, instrument=btc,
+            working_buy=Decimal(buy), working_sell=Decimal(sell),
+            open_order_count=1,
+        ),),
+    ))
+
+
+def _set_position(clock, state, strategy_id, btc, qty: str) -> None:
+    state.apply_position_update(PositionUpdateEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="t",
+        strategy_id=strategy_id, instrument=btc,
+        quantity=Decimal(qty), average_entry_price=Decimal("50000"),
+        realized_pnl=Decimal(0), unrealized_pnl=Decimal(0),
+        mark_price=Decimal("50000"),
+    ))
+
+
+def _ladder_signal(clock, btc, strategy_id, qtys, side) -> SignalEvent:
+    """A signal with multiple same-side legs (a price ladder)."""
+    return SignalEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="test",
+        strategy_id=strategy_id, instrument=btc,
+        legs=tuple(_leg(qty=q, side=side) for q in qtys),
+    )
+
+
+def test_max_position_requote_ignores_working_orders(clock, btc, strategy_id) -> None:
+    """Reproduces the place/ack/cancel thrash: a short position one tick from
+    the cap, re-quoting the same sell. The signal is a desired-state snapshot,
+    so the resting order (working_sell) must NOT count against the cap — else
+    the re-quote is rejected, the OMS cancels the resting order as 'withdrawn',
+    and the cycle repeats forever. Approval here means the reconciler
+    match/amends instead of cancel-replacing."""
+    state = RiskState(clock=clock)
+    _set_position(clock, state, strategy_id, btc, "-0.0081")
+    # A sell quote is already resting; under the old (working-counting) logic
+    # this was exactly what consumed the last of the cap.
+    _set_working(state, strategy_id, btc, sell="0.0019")
+    rule = MaxPositionRule(max_long=Decimal("0.01"), max_short=Decimal("0.01"))
+    sig = _signal(clock, btc, strategy_id, qty="0.0019", side=Side.SELL)
+
+    result = rule.evaluate(sig, sig.legs[0], state)
+
+    assert result.approved
+    assert result.approved_quantity is None  # full size, no clamp
+
+
+def test_max_position_ladder_legs_share_the_cap(clock, btc, strategy_id) -> None:
+    """Same-side legs *within one signal* are summed against each other, so a
+    ladder is still bounded by the cap as a whole even though working orders
+    are ignored."""
+    state = RiskState(clock=clock)
+    _set_position(clock, state, strategy_id, btc, "-0.0081")  # 0.0019 of room
+    rule = MaxPositionRule(max_long=Decimal("0.01"), max_short=Decimal("0.01"))
+    # Two sell legs totalling 0.0038 — more than the 0.0019 of remaining room.
+    sig = _ladder_signal(clock, btc, strategy_id, ["0.0019", "0.0019"], Side.SELL)
+
+    # First leg: sibling = 0.0019, headroom = (-0.0081 - 0.0019) + 0.01 = 0 -> reject.
+    r0 = rule.evaluate(sig, sig.legs[0], state)
+    assert not r0.approved
+    # Symmetric for the second leg.
+    r1 = rule.evaluate(sig, sig.legs[1], state)
+    assert not r1.approved
+
+
+def test_max_position_ladder_within_cap_approves_each_leg(clock, btc, strategy_id) -> None:
+    """A ladder whose total fits the cap approves every leg at full size."""
+    state = RiskState(clock=clock)
+    _set_position(clock, state, strategy_id, btc, "0")  # flat: full 0.01 of room
+    rule = MaxPositionRule(max_long=Decimal("0.01"), max_short=Decimal("0.01"))
+    # Two sell legs totalling 0.004 — well within the 0.01 short cap.
+    sig = _ladder_signal(clock, btc, strategy_id, ["0.002", "0.002"], Side.SELL)
+
+    for leg in sig.legs:
+        r = rule.evaluate(sig, leg, state)
+        assert r.approved
+        assert r.approved_quantity is None  # full size, no clamp
 
 
 def test_max_position_rejects_at_cap(clock, btc, strategy_id) -> None:

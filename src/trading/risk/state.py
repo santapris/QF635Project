@@ -60,8 +60,10 @@ class RiskState:
     ) -> Quantity:
         """Signed confirmed position: +long, -short, 0 flat.
 
-        This is fills-only. For limit checks that must account for in-flight
-        orders, combine with :meth:`get_working`.
+        This is fills-only. MaxPosition checks the cap against this plus the
+        *desired legs in the signal* (signals are full-state snapshots; the OMS
+        reconciles resting orders to them), not against working orders — see
+        :meth:`get_working` for when working exposure is the right input instead.
         """
         return self._positions.get(
             (strategy_id, instrument.instrument_id), Quantity(Decimal(0))
@@ -76,6 +78,12 @@ class RiskState:
         that side. Empty when the OMS has published no open orders for this
         key. Note this lags signal evaluation by one in-flight signal — see
         :meth:`apply_open_orders_snapshot`.
+
+        Currently unused by the built-in rules: MaxPosition treats signals as
+        desired-state snapshots and counts the signal's own legs, not working
+        orders (counting both double-counts a re-quote against its own resting
+        order). Retained for rules that must bound *incremental*-signal
+        strategies, where each signal is additive rather than a full snapshot.
         """
         return self._working.get(
             (strategy_id, instrument.instrument_id),

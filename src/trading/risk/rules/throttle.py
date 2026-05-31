@@ -7,6 +7,12 @@ sliding window exceeds the configured cap.
 
 Rejects, doesn't clamp. Throttling means "you're moving too fast; slow
 down." Approving a fraction of the next signal would still be too fast.
+
+Bounds the signal *emission rate*, not order state, so it is independent of
+signal-as-snapshot semantics (see :class:`SignalEvent`). A snapshot-style
+re-quoter legitimately emits one signal per tick, so set ``max_signals`` to
+suit that cadence — this rule is not the place to bound resting exposure
+(that is MaxPosition's job).
 """
 
 from __future__ import annotations

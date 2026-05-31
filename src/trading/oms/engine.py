@@ -24,6 +24,15 @@ Topic discipline:
 
 Signal cache eviction: signals older than ``signal_ttl_seconds`` are
 dropped on each new signal arrival. Stops the cache growing unbounded.
+
+Signal-as-snapshot (see :class:`SignalEvent` for the full contract): a signal
+is a strategy's *complete desired resting state* for one instrument, not an
+increment. ``_reconcile_immediate`` enforces this — it matches the signal's
+legs against all resting orders for the (strategy, instrument), including
+in-flight ones, and cancels any resting order with no matching leg. Including
+in-flight orders in that match is what makes a signal a true snapshot rather
+than an increment, and is what lets the risk layer cap exposure without
+counting working orders.
 """
 
 from __future__ import annotations
@@ -477,6 +486,14 @@ class OMSEngine:
         of how many orders exist per side. This handles both ladder strategies
         (multiple legs per side, each matched individually) and accumulation
         bugs (stale extras with no matching desired leg).
+
+        Snapshot enforcement (see :class:`SignalEvent`): the ``resting`` set
+        below includes in-flight ``PENDING_NEW`` orders, not just acknowledged
+        ones. That is deliberate and load-bearing — matching against in-flight
+        orders is what makes a signal a true snapshot rather than an increment,
+        so a strategy re-quoting faster than the ack round-trip matches its own
+        in-flight order instead of stacking duplicates. Risk relies on this and
+        so does not count working orders (see MaxPosition).
         """
         sid = signal.strategy_id
         iid = signal.instrument.instrument_id
