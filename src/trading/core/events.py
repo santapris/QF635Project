@@ -346,6 +346,7 @@ class AmendRequest(BaseEvent):
     order_id: OrderId
     client_order_id: ClientOrderId
     instrument: Instrument
+    side: Side
     new_quantity: Quantity | None = None
     new_price: Price | None = None
 
@@ -373,6 +374,14 @@ class OrderCancelled(BaseEvent):
     order_id: OrderId
     client_order_id: ClientOrderId
     reason: str = ""
+
+
+class CancelRejected(BaseEvent):
+    """Cancel request was rejected by the venue — the order is still live."""
+    event_type: Literal["cancel_rejected"] = "cancel_rejected"
+    order_id: OrderId
+    client_order_id: ClientOrderId
+    reason: str
 
 
 class OrderAmended(BaseEvent):
@@ -582,6 +591,7 @@ __all__ = [
     "AmendRequest",
     "ApprovedLeg",
     "BaseEvent",
+    "CancelRejected",
     "CancelRequest",
     "Event",
     "ExecutionRoutedEvent",

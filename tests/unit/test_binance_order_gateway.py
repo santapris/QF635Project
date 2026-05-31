@@ -11,16 +11,20 @@ from uuid import uuid4
 import pytest
 
 from trading.core import (
+    AmendRequest,
     AssetType,
     CancelRequest,
     ClientOrderId,
     Instrument,
     LiveClock,
     OrderAcknowledged,
+    OrderAmended,
     OrderId,
     OrderRejected,
     OrderRequest,
     OrderType,
+    Price,
+    Quantity,
     Side,
     StrategyId,
     TimeInForce,
@@ -165,6 +169,24 @@ def _gw_with_fake(rest, instruments):
         spot_ws_base="wss://testnet.binance.vision",
         futures_rest_base="https://demo-fapi.binance.com",
         futures_ws_base="wss://fstream.binancefuture.com",
+    )
+    creds = BinanceCredentials(api_key="k", api_secret="s")
+    mapper = SymbolMapper(instruments)
+    gw = BinanceOrderGateway(
+        bus=bus, clock=LiveClock(), config=cfg, credentials=creds,
+        symbols=mapper, rest_client=rest,
+    )
+    return bus, gw
+
+
+def _futures_gw_with_fake(rest, instruments):
+    bus = MemoryBus()
+    cfg = BinanceConfig(
+        spot_rest_base="https://testnet.binance.vision",
+        spot_ws_base="wss://testnet.binance.vision",
+        futures_rest_base="https://demo-fapi.binance.com",
+        futures_ws_base="wss://fstream.binancefuture.com",
+        futures=True,
     )
     creds = BinanceCredentials(api_key="k", api_secret="s")
     mapper = SymbolMapper(instruments)
@@ -322,6 +344,40 @@ async def test_order_gateway_sends_cancel(btc_binance):
     assert method == "DELETE" and path == "/api/v3/order"
     assert params["symbol"] == "BTCUSDT"
     assert params["origClientOrderId"] == "cli-abc"
+
+
+async def test_futures_amend_publishes_venue_resulting_values(btc_binance):
+    """The futures PUT amend publishes OrderAmended carrying the price/qty the
+    venue actually rested at (from the PUT response), not the requested values.
+
+    Guards against silent local/venue divergence: if Binance clamps the amend,
+    trusting the request would orphan the resting order and accumulate ladders.
+    """
+    rest = _FakeREST()
+    # We request 50001 / 0.20 but the venue reports it rested at 50000.5 / 0.20.
+    rest.responses.append(
+        {"orderId": 4242, "status": "NEW", "price": "50000.5", "origQty": "0.20"}
+    )
+    bus, gw = _futures_gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    amend = AmendRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("test-amend-1"),
+        instrument=btc_binance,
+        side=Side.BUY,
+        new_price=Price(Decimal("50001")),
+        new_quantity=Quantity(Decimal("0.20")),
+    )
+    await bus.publish(Topic.ORDERS, amend)
+
+    method, path, _ = rest.calls[0]
+    assert method == "PUT" and path == "/fapi/v1/order"
+    amended = [e for e in bus.published_on(Topic.ORDERS) if isinstance(e, OrderAmended)]
+    assert len(amended) == 1
+    assert amended[0].new_price == Decimal("50000.5")   # venue value, not 50001
+    assert amended[0].new_quantity == Decimal("0.20")
+    assert amended[0].new_exchange_order_id == "4242"
 
 
 async def test_order_gateway_format_decimal_no_exponent(btc_binance):

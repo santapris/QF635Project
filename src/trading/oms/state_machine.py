@@ -53,6 +53,7 @@ _LEGAL_TRANSITIONS: dict[OrderStatus | None, frozenset[OrderStatus]] = {
         OrderStatus.CANCELLED,
         OrderStatus.PARTIALLY_FILLED,  # fill raced the cancel
         OrderStatus.FILLED,            # fill raced the cancel and won
+        OrderStatus.ACKNOWLEDGED,      # cancel rejected by venue — order still live
     }),
     # Amend in-flight: can confirm back to ACKNOWLEDGED, race with a fill,
     # or the venue can kill the order (treat as CANCELLED).

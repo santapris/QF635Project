@@ -221,6 +221,40 @@ async def test_order_amended_confirm_updates_price() -> None:
 
 
 @pytest.mark.asyncio
+async def test_order_amended_confirm_prefers_venue_values_over_requested() -> None:
+    """The OMS commits the price/qty the venue *reports* in OrderAmended, not
+    the requested pending_amend. The venue can clamp an amend (e.g. a GTX price
+    adjusted to avoid crossing); trusting the requested value would silently
+    diverge local state from the book and orphan the resting order."""
+    bus = _CaptureBus()
+    oms = OMSEngine(bus=bus, clock=LiveClock())
+    instr = _instrument()
+
+    order = _resting_order(instr, Side.BUY, "50000.00", qty="0.10")
+    oms._orders[order.order_id] = order
+    order.transition_to(OrderStatus.PENDING_AMEND, at_ns=0)
+    # We *requested* 50001.00 / 0.20 ...
+    order.pending_amend = (Price(Decimal("50001.00")), Quantity(Decimal("0.20")))
+
+    # ... but the venue reports it actually rested at 50000.50 / 0.20.
+    event = OrderAmended(
+        ts_event=1,
+        ts_ingest=1,
+        source="sim",
+        order_id=order.order_id,
+        client_order_id=order.client_order_id,
+        new_price=Price(Decimal("50000.50")),
+        new_quantity=Quantity(Decimal("0.20")),
+    )
+    await oms._handle_amend(event)
+
+    assert order.status == OrderStatus.ACKNOWLEDGED
+    assert order.price == Decimal("50000.50")   # venue value, not 50001.00
+    assert order.quantity == Decimal("0.20")
+    assert order.pending_amend is None
+
+
+@pytest.mark.asyncio
 async def test_withdrawn_side_cancels() -> None:
     """An order on a side no longer in the desired set is cancelled."""
     bus = _CaptureBus()

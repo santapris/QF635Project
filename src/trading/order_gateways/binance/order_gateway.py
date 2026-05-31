@@ -38,6 +38,7 @@ from ...core.clock import Clock
 from ...core.events import (
     AmendRequest,
     BaseEvent,
+    CancelRejected,
     CancelRequest,
     OrderAcknowledged,
     OrderAmended,
@@ -51,6 +52,8 @@ from ...core.types import (
     ExchangeOrderId,
     OrderId,
     OrderType,
+    Price,
+    Quantity,
     TimeInForce,
 )
 from ...event_bus.base import AbstractEventBus, Topic
@@ -275,13 +278,9 @@ class BinanceOrderGateway(AbstractOrderGateway):
     async def _handle_amend_futures(self, req: AmendRequest) -> None:
         """Futures native amend via PUT /fapi/v1/order."""
         wire_symbol = self._symbols.wire_symbol(req.instrument)
-        side = self._order_sides.get(req.client_order_id)
-        if side is None:
-            # Order was placed before this process started (adopted from venue).
-            # We don't have the side so we can't issue the PUT — fall back to
-            # cancel+re-place via the spot path.
-            await self._handle_amend_spot(req)
-            return
+        # Seed side from the request so adopted orders can use the native PUT path.
+        self._order_sides.setdefault(req.client_order_id, side_to_binance(req.side))
+        side = self._order_sides[req.client_order_id]
         params: dict[str, Any] = {
             "symbol": wire_symbol,
             "side": side,
@@ -309,6 +308,26 @@ class BinanceOrderGateway(AbstractOrderGateway):
             return
 
         new_exchange_id = ExchangeOrderId(str(resp["orderId"])) if "orderId" in resp else None
+
+        # Publish the venue's *actual* resulting price/qty, not what we asked
+        # for. The PUT can clamp or partially apply (e.g. a quantity change
+        # against an already-partially-filled order), and a GTX amend that
+        # would cross is silently adjusted rather than rejected on some paths.
+        # Trusting req.new_* here is exactly how local state drifts from the
+        # venue and orphans accumulate. Fall back to the requested value only
+        # if the response omits the field.
+        venue_price = resp.get("price")
+        venue_qty = resp.get("origQty")
+        applied_price = (
+            Price(Decimal(str(venue_price)))
+            if venue_price not in (None, "", "0", "0.0")
+            else req.new_price
+        )
+        applied_qty = (
+            Quantity(Decimal(str(venue_qty)))
+            if venue_qty not in (None, "", "0", "0.0")
+            else req.new_quantity
+        )
         await self._safe_publish(
             Topic.ORDERS,
             OrderAmended(
@@ -317,8 +336,8 @@ class BinanceOrderGateway(AbstractOrderGateway):
                 source=self.venue,
                 order_id=req.order_id,
                 client_order_id=req.client_order_id,
-                new_price=req.new_price,
-                new_quantity=req.new_quantity,
+                new_price=applied_price,
+                new_quantity=applied_qty,
                 new_exchange_order_id=new_exchange_id,
             ),
         )
@@ -396,18 +415,15 @@ class BinanceOrderGateway(AbstractOrderGateway):
     async def _publish_cancel_rejected(
         self, req: CancelRequest, reason: str
     ) -> None:
-        # We reuse OrderRejected to signal a cancel failure — same shape,
-        # same OMS handler. The OMS sees this and knows the cancel didn't
-        # take.
         await self._safe_publish(
             Topic.ORDERS,
-            OrderRejected(
+            CancelRejected(
                 ts_event=self._clock.now_ns(),
                 ts_ingest=self._clock.now_ns(),
                 source=self.venue,
                 order_id=req.order_id,
                 client_order_id=req.client_order_id,
-                reason=f"cancel failed: {reason}",
+                reason=reason,
             ),
         )
 
