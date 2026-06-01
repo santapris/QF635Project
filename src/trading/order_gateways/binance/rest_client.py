@@ -301,6 +301,8 @@ class BinanceRESTClient:
                 return payload
         except aiohttp.ClientError as exc:
             raise OrderGatewayError(f"binance transport error: {exc}") from exc
+        except asyncio.TimeoutError as exc:
+            raise OrderGatewayError(f"binance request timed out ({method} {url})") from exc
 
     @staticmethod
     def _parse_retry_after(value: str | None) -> float | None:
