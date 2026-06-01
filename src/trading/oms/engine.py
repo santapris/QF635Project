@@ -278,22 +278,27 @@ class OMSEngine:
             _log.warning("fill_for_unknown_order_id_ignoring", order_id=event.order_id)
             return
         if order.is_terminal:
-            # Fill arrived after the order reached a terminal state (e.g. cancel-fill
-            # race). The exchange processed the fill before our cancel landed; log and
-            # skip — the strategy already received the fill callback via the bus.
-            #
-            # TODO: this skips updating order.cumulative_filled / average_fill_price,
-            # so the OMS's fill accounting for this order is incomplete. If anything
-            # downstream reads those fields after cancellation (reconciliation, PnL,
-            # algo slicing) it will see stale data. Fix: split apply_fill into a
-            # data-update step and a state-transition step so a terminal order can
-            # still absorb the fill accounting without attempting an illegal transition.
+            # Fill arrived after the order reached a terminal state. This is a
+            # race we can't avoid: the venue processed the fill, but our amend or
+            # cancel hit "order gone" (-2013) / a cancel ack first and we already
+            # terminalized the order (see the amend-gone path in the Binance
+            # gateway). The fill is authoritative — absorb its *accounting* so
+            # cumulative_filled / average_fill_price / leaves stay correct, but
+            # don't attempt an (illegal) state transition out of the terminal
+            # state. Position/PnL are driven off the bus FillEvent directly, so
+            # this only repairs the OMS's per-order view.
+            recorded = order.record_fill(event)
+            if not recorded:
+                _log.info("duplicate_fill_ignored", fill_id=event.fill_id)
+                return
             _log.warning(
-                "fill_on_terminal_order_ignored",
+                "fill_on_terminal_order_recorded",
                 order_id=event.order_id,
                 order_status=order.status,
                 fill_id=event.fill_id,
+                cumulative_filled=str(order.cumulative_filled),
             )
+            await self._publish_open_orders()
             return
         applied = order.apply_fill(event)
         if not applied:

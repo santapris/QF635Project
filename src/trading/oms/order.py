@@ -90,12 +90,13 @@ class Order:
         self.status = new_status
         self.last_update_ns = at_ns
 
-    def apply_fill(self, fill: FillEvent) -> bool:
-        """Apply a fill. Returns True if this fill was applied (False if dup).
+    def record_fill(self, fill: FillEvent) -> bool:
+        """Update fill accounting only. Returns False if this fill is a dup.
 
-        Updates cumulative_filled and average_fill_price, then transitions
-        to PARTIALLY_FILLED or FILLED. Does *not* publish — the caller
-        owns publishing decisions.
+        Updates cumulative_filled and average_fill_price. Does *not* change
+        status, so it is safe to call on a terminal order whose fill raced a
+        cancel/amend-gone and arrived after the order was already terminalized
+        (see :meth:`apply_fill` for the normal, non-terminal path).
         """
         fill_key = str(fill.fill_id)
         if fill_key in self._applied_fills:
@@ -112,6 +113,17 @@ class Order:
             )
             self.average_fill_price = Price(total_cost / new_qty)
         self.cumulative_filled = new_qty
+        return True
+
+    def apply_fill(self, fill: FillEvent) -> bool:
+        """Apply a fill. Returns True if this fill was applied (False if dup).
+
+        Updates cumulative_filled and average_fill_price, then transitions
+        to PARTIALLY_FILLED or FILLED. Does *not* publish — the caller
+        owns publishing decisions.
+        """
+        if not self.record_fill(fill):
+            return False
 
         # Decide new status.
         new_status = (

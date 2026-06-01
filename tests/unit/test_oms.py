@@ -16,6 +16,9 @@ from trading.core import (
     StrategyId,
     TimeInForce,
 )
+import asyncio
+
+from trading.core.events import FillEvent
 from trading.core.types import ClientOrderId, OrderId, OrderStatus
 from trading.oms.engine import OMSEngine
 from trading.oms.order import Order
@@ -86,6 +89,63 @@ def test_leg_has_live_children_ignores_other_legs() -> None:
     other = _make_order(leg_id="leg-2")
     oms._orders[other.order_id] = other
     assert oms._leg_has_live_children("leg-1") is False
+
+
+# --- fill-on-terminal race (amend-gone / cancel-fill) ----------------------
+
+
+def _fill(order: Order, *, qty: str, price: str = "50000") -> FillEvent:
+    return FillEvent(
+        ts_event=0,
+        ts_ingest=0,
+        source="test",
+        order_id=order.order_id,
+        client_order_id=order.client_order_id,
+        exchange_order_id=None,
+        strategy_id=order.strategy_id,
+        instrument=order.instrument,
+        side=order.side,
+        fill_price=Decimal(price),
+        fill_quantity=Decimal(qty),
+        cumulative_quantity=Decimal(qty),
+        leaves_quantity=Decimal("0"),
+    )
+
+
+def test_record_fill_updates_accounting_without_transition() -> None:
+    # A terminal order can still absorb fill accounting; status is untouched.
+    order = _make_order(quantity="1", filled="0", terminal=True)
+    assert order.status is OrderStatus.FILLED  # _make_order terminal marker
+
+    applied = order.record_fill(_fill(order, qty="0.4"))
+
+    assert applied is True
+    assert order.cumulative_filled == Decimal("0.4")
+    assert order.average_fill_price == Decimal("50000")
+    assert order.status is OrderStatus.FILLED  # no illegal transition attempted
+
+
+def test_record_fill_is_idempotent_on_duplicate() -> None:
+    order = _make_order(quantity="1", terminal=True)
+    fill = _fill(order, qty="0.4")
+    assert order.record_fill(fill) is True
+    assert order.record_fill(fill) is False  # same fill_id — dup
+    assert order.cumulative_filled == Decimal("0.4")
+
+
+def test_on_fill_records_onto_terminal_order_not_dropped() -> None:
+    # Regression: amend-gone (-2013) terminalized the order as CANCELLED, then
+    # the authoritative fill arrived and used to be silently dropped.
+    oms = _oms()
+    order = _make_order(quantity="0.002", filled="0")
+    order.status = OrderStatus.CANCELLED  # terminalized by amend-gone race
+    oms._orders[order.order_id] = order
+
+    asyncio.run(oms._on_fill(_fill(order, qty="0.002", price="73501.7")))
+
+    assert order.cumulative_filled == Decimal("0.002")
+    assert order.leaves_quantity == Decimal("0")
+    assert order.status is OrderStatus.CANCELLED  # stays terminal, no crash
 
 
 def test_leg_has_live_children_ignores_plain_orders() -> None:
