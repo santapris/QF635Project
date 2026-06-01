@@ -382,13 +382,23 @@ class OMSEngine:
         order = self._orders.get(event.order_id)
         if order is None:
             return
+        order.pending_amend = None
+        # If fills already consumed all leaves while the amend was in-flight,
+        # the order is effectively done — terminalize it rather than reviving it
+        # as ACKNOWLEDGED with leaves=0, which would cause the reconciler to
+        # loop amending it forever.
+        if order.leaves_quantity == 0:
+            try:
+                order.transition_to(OrderStatus.FILLED, at_ns=self._clock.now_ns())
+            except InvalidStateTransitionError:
+                pass
+            return
         _log.warning(
             "amend_rejected_rolling_back_to_acknowledged",
             order_id=str(event.order_id),
             client_order_id=str(event.client_order_id),
             reason=event.reason,
         )
-        order.pending_amend = None
         try:
             order.transition_to(OrderStatus.ACKNOWLEDGED, at_ns=self._clock.now_ns())
         except InvalidStateTransitionError:
