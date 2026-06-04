@@ -1,11 +1,24 @@
+import { useState, useMemo } from "react";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
 import Chip from "@mui/material/Chip";
 import Box from "@mui/material/Box";
+import TextField from "@mui/material/TextField";
+import MenuItem from "@mui/material/MenuItem";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { OpenOrderRow } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
+
+const STATUS_VALUES = ["ALL", "ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED"] as const;
+
+const STATUS_COLOR: Record<string, "default" | "info" | "success" | "error" | "warning"> = {
+  ACKNOWLEDGED: "info",
+  PARTIALLY_FILLED: "warning",
+  FILLED: "success",
+  CANCELLED: "default",
+  REJECTED: "error",
+};
 
 const columns: GridColDef<OpenOrderRow>[] = [
   { field: "ts", headerName: "Created", width: 110, renderCell: ({ value }) => formatTs(value as number) },
@@ -33,12 +46,13 @@ const columns: GridColDef<OpenOrderRow>[] = [
   {
     field: "status",
     headerName: "Status",
-    width: 110,
+    width: 130,
+    sortable: false,
     renderCell: ({ value }) => (
       <Chip
         label={value}
         size="small"
-        color={value === "PARTIALLY_FILLED" ? "warning" : "info"}
+        color={STATUS_COLOR[value as string] ?? "info"}
       />
     ),
   },
@@ -48,18 +62,38 @@ interface Props {
   openOrders: OpenOrderRow[];
 }
 
-// One row per currently-resting order, sourced from the OMS's authoritative
-// open-orders snapshot (polled). Because each snapshot is the complete current
-// truth, a missed WS event can never leave a stale row here.
 export default function OpenOrdersPanel({ openOrders }: Props) {
+  const [statusFilter, setStatusFilter] = useState("ALL");
+
+  const filtered = useMemo(() => {
+    if (statusFilter === "ALL") return openOrders;
+    return openOrders.filter((r) => r.status === statusFilter);
+  }, [openOrders, statusFilter]);
+
   return (
     <Paper sx={{ p: 2, height: "100%", display: "flex", flexDirection: "column" }}>
-      <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 700 }}>
-        Open Orders
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+          Open Orders
+        </Typography>
+        <TextField
+          select
+          label="Status"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+          size="small"
+          sx={{ minWidth: 150 }}
+        >
+          {STATUS_VALUES.map((s) => (
+            <MenuItem key={s} value={s}>
+              {s}
+            </MenuItem>
+          ))}
+        </TextField>
+      </Box>
       <Box sx={{ flex: 1, minHeight: 0 }}>
         <DataGrid
-          rows={openOrders}
+          rows={filtered}
           columns={columns}
           density="compact"
           disableRowSelectionOnClick

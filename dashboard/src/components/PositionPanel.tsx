@@ -12,6 +12,12 @@ function pnlColor(val: string): string {
   return "text.primary";
 }
 
+function formatPnl(val: string): string {
+  const n = parseFloat(val);
+  if (isNaN(n)) return val;
+  return n.toFixed(4);
+}
+
 const columns: GridColDef<PositionRow>[] = [
   { field: "instrument", headerName: "Instrument", flex: 1, minWidth: 120 },
   { field: "quantity", headerName: "Qty", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
@@ -32,7 +38,7 @@ const columns: GridColDef<PositionRow>[] = [
     align: "right",
     headerAlign: "right",
     renderCell: ({ value }) => (
-      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{value}</Box>
+      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatPnl(value as string)}</Box>
     ),
   },
   {
@@ -43,7 +49,7 @@ const columns: GridColDef<PositionRow>[] = [
     align: "right",
     headerAlign: "right",
     renderCell: ({ value }) => (
-      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{value}</Box>
+      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatPnl(value as string)}</Box>
     ),
   },
 ];
@@ -76,7 +82,7 @@ const venueColumns: GridColDef<VenueNetRow>[] = [
     align: "right",
     headerAlign: "right",
     renderCell: ({ value }) => (
-      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{value}</Box>
+      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatPnl(value as string)}</Box>
     ),
   },
 ];
