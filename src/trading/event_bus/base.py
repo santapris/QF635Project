@@ -32,7 +32,7 @@ class Topic:
     using the constants prevents typos that silently never deliver.
     """
     # Final[str] locks the value for example, MARKET_DATA can only = "market-data"
-    MARKET_DATA: Final[str] = "market-data" 
+    MARKET_DATA: Final[str] = "market-data"
     SIGNALS: Final[str] = "signals"
     RISK_DECISIONS: Final[str] = "risk-decisions"
     ORDERS: Final[str] = "orders"
@@ -42,6 +42,8 @@ class Topic:
     VENUE_POSITIONS: Final[str] = "venue-positions"
     ACCOUNT: Final[str] = "account"
     ALERTS: Final[str] = "alerts"
+    ANALYTICS: Final[str] = "analytics"
+    STRATEGY_DIAGNOSTICS: Final[str] = "strategy-diagnostics"
 
 
 @runtime_checkable

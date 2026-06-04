@@ -5,15 +5,17 @@ or observability without circular dependencies.
 """
 
 from .avellaneda_stoikov import ASQuotes, AvellanedaStoikov
+from .classifiers import BVCClassifier, TickRuleClassifier
 from .imbalance import OBI, OFI
 from .microprice import Microprice
 from .quote_filters import passes_min_notional, post_only_guard, round_to_lot, round_to_tick
+from .service import AnalyticsService
 from .volatility import EWMAVolatility, ParkinsonVolatility
-from .classifiers import BVCClassifier, TickRuleClassifier
 from .vpin import VPIN
 
 __all__ = [
     "ASQuotes",
+    "AnalyticsService",
     "AvellanedaStoikov",
     "BVCClassifier",
     "EWMAVolatility",

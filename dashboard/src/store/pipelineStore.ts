@@ -163,6 +163,63 @@ export interface LogRow {
   extra: Record<string, string>;
 }
 
+/** Flat analytics snapshot merged from two backend sources:
+ *  - microstructure fields: always present when AnalyticsService runs
+ *  - strategy_diagnostics fields: only present for strategies that opt in (e.g. AS)
+ */
+export interface AnalyticsSnapshot {
+  ts: number;
+  instrument: string;
+  // --- Microstructure (always present) ---
+  bid_price: number;
+  ask_price: number;
+  bid_size: number;
+  ask_size: number;
+  mid_price: number;
+  microprice: number;
+  sigma: number | null;
+  obi: number | null;        // L1 OBI (top-of-book)
+  ofi: number | null;
+  vpin: number | null;
+  // --- L2 depth metrics (null until depth stream bootstrapped) ---
+  obi_l2: number | null;           // OBI across top-10 levels
+  depth_bid_total: number | null;  // total bid size top-10
+  depth_ask_total: number | null;  // total ask size top-10
+  // --- Strategy diagnostics (null when strategy doesn't opt in) ---
+  strategy_id: string | null;
+  inventory: number | null;
+  reservation_raw: number | null;
+  reservation: number | null;
+  half_spread_raw: number | null;
+  half_spread: number | null;
+  bid_quote: number | null;
+  ask_quote: number | null;
+  buy_guard: boolean | null;
+  sell_guard: boolean | null;
+  n_legs: number | null;
+  vpin_widened: boolean;  // strategy threshold decision; false when no strategy diagnostics
+}
+
+export interface AnalyticsPoint {
+  ts: number;
+  microprice: number;
+  mid_price: number;
+  sigma: number | null;
+  obi: number | null;
+  ofi: number | null;
+  vpin: number | null;
+  obi_l2: number | null;
+  depth_bid_total: number | null;
+  depth_ask_total: number | null;
+  reservation: number | null;
+  half_spread: number | null;
+  half_spread_raw: number | null;
+  bid_quote: number | null;
+  ask_quote: number | null;
+  inventory: number | null;
+  vpin_widened: boolean;
+}
+
 export interface PipelineState {
   status: ConnectionStatus;
   ticks: Record<string, TickData>;          // instrument -> latest tick
@@ -181,6 +238,9 @@ export interface PipelineState {
   account: AccountSnapshot | null;          // latest exchange account snapshot
   logs: LogRow[];                           // rolling 500
   _lastPnlSampleMs: number;                 // wall-clock ms of last pnlHistory sample
+  analytics: AnalyticsSnapshot | null;      // latest analytics snapshot (for gauges)
+  analyticsHistory: AnalyticsPoint[];       // rolling 300, 250ms-sampled (for charts)
+  _lastAnalyticsSampleMs: number;           // wall-clock ms of last analyticsHistory sample
 }
 
 export const initialState: PipelineState = {
@@ -201,6 +261,9 @@ export const initialState: PipelineState = {
   account: null,
   logs: [],
   _lastPnlSampleMs: 0,
+  analytics: null,
+  analyticsHistory: [],
+  _lastAnalyticsSampleMs: 0,
 };
 
 export type PipelineAction =
@@ -216,12 +279,17 @@ export type PipelineAction =
   | { type: "POSITIONS_SNAPSHOT"; payload: { positions: PositionRow[]; venueNet: VenueNetRow[] } }
   | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
-  | { type: "CLEAR_LOGS" };
+  | { type: "CLEAR_LOGS" }
+  | { type: "ANALYTICS"; payload: AnalyticsSnapshot };
 
 /** Minimum wall-clock interval between PnL chart samples (1 second). */
 const PNL_SAMPLE_INTERVAL_MS = 1_000;
 /** Maximum PnL history points retained in memory. */
 const PNL_HISTORY_LIMIT = 500;
+/** Minimum wall-clock interval between analytics chart samples (250ms → 4 Hz). */
+const ANALYTICS_SAMPLE_INTERVAL_MS = 250;
+/** Maximum analytics history points retained in memory (~75s window at 4 Hz). */
+const ANALYTICS_HISTORY_LIMIT = 300;
 
 function cap<T>(arr: T[], item: T, limit: number): T[] {
   const next = [item, ...arr];
@@ -345,6 +413,45 @@ export function pipelineReducer(
 
     case "CLEAR_LOGS":
       return { ...state, logs: [] };
+
+    case "ANALYTICS": {
+      const snap = action.payload;
+      const nowMs = Date.now();
+      const shouldSample = nowMs - state._lastAnalyticsSampleMs >= ANALYTICS_SAMPLE_INTERVAL_MS;
+
+      const point: AnalyticsPoint = {
+        ts: snap.ts,
+        microprice: snap.microprice,
+        mid_price: snap.mid_price,
+        sigma: snap.sigma,
+        obi: snap.obi,
+        ofi: snap.ofi,
+        vpin: snap.vpin,
+        obi_l2: snap.obi_l2,
+        depth_bid_total: snap.depth_bid_total,
+        depth_ask_total: snap.depth_ask_total,
+        reservation: snap.reservation,
+        half_spread: snap.half_spread,
+        half_spread_raw: snap.half_spread_raw,
+        bid_quote: snap.bid_quote,
+        ask_quote: snap.ask_quote,
+        inventory: snap.inventory,
+        vpin_widened: snap.vpin_widened,
+      };
+
+      const nextHistory = shouldSample
+        ? (state.analyticsHistory.length >= ANALYTICS_HISTORY_LIMIT
+            ? [...state.analyticsHistory.slice(-(ANALYTICS_HISTORY_LIMIT - 1)), point]
+            : [...state.analyticsHistory, point])
+        : state.analyticsHistory;
+
+      return {
+        ...state,
+        analytics: snap,
+        analyticsHistory: nextHistory,
+        _lastAnalyticsSampleMs: shouldSample ? nowMs : state._lastAnalyticsSampleMs,
+      };
+    }
 
     default:
       return state;

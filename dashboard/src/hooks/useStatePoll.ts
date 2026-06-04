@@ -21,6 +21,7 @@ const HTTP_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8765";
 const POSITIONS_INTERVAL_MS   = 2_000;
 const ACCOUNT_INTERVAL_MS     = 5_000;
 const OPEN_ORDERS_INTERVAL_MS = 2_000;
+const ANALYTICS_INTERVAL_MS   = 500;
 
 interface PositionsResponse {
   timestamp: string;
@@ -88,6 +89,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
     let positionsTimer:  ReturnType<typeof setTimeout> | null = null;
     let accountTimer:    ReturnType<typeof setTimeout> | null = null;
     let openOrdersTimer: ReturnType<typeof setTimeout> | null = null;
+    let analyticsTimer:  ReturnType<typeof setTimeout> | null = null;
 
     const tickPositions = async () => {
       const data = await fetchJSON<PositionsResponse>("/state/positions", ctrl.signal);
@@ -173,16 +175,77 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       }
     };
 
+    const tickAnalytics = async () => {
+      const data = await fetchJSON<{
+        timestamp: string;
+        microstructure: Record<string, unknown> | null;
+        strategy_diagnostics: Record<string, unknown> | null;
+      }>("/state/analytics", ctrl.signal);
+
+      if (data?.microstructure && !ctrl.signal.aborted) {
+        const m = data.microstructure;
+        const d = data.strategy_diagnostics;
+
+        // Skip if prices are zero/missing — guards history from poisoning the chart y-axis domain.
+        const midPrice = Number(m.mid_price ?? 0);
+        if (midPrice === 0) return;
+
+        const instrument = (m.instrument as Record<string, unknown>)?.symbol
+          ?? String(m.instrument ?? "");
+
+        dispatch({
+          type: "ANALYTICS",
+          payload: {
+            ts: Date.parse(data.timestamp) || Date.now(),
+            instrument: String(instrument),
+            // Microstructure fields — always present
+            bid_price: Number(m.bid_price ?? 0),
+            ask_price: Number(m.ask_price ?? 0),
+            bid_size: Number(m.bid_size ?? 0),
+            ask_size: Number(m.ask_size ?? 0),
+            mid_price: midPrice,
+            microprice: Number(m.microprice ?? 0),
+            sigma: m.sigma != null ? Number(m.sigma) : null,
+            obi: m.obi != null ? Number(m.obi) : null,
+            ofi: m.ofi != null ? Number(m.ofi) : null,
+            vpin: m.vpin != null ? Number(m.vpin) : null,
+            // L2 depth metrics — null until BinanceL2Feed bootstrapped
+            obi_l2: m.obi_l2 != null ? Number(m.obi_l2) : null,
+            depth_bid_total: m.depth_bid_total != null ? Number(m.depth_bid_total) : null,
+            depth_ask_total: m.depth_ask_total != null ? Number(m.depth_ask_total) : null,
+            // Strategy diagnostics fields — null when strategy doesn't opt in
+            strategy_id: d ? String(d.strategy_id ?? "") : null,
+            inventory: d?.inventory != null ? Number(d.inventory) : null,
+            reservation_raw: d?.reservation_raw != null ? Number(d.reservation_raw) : null,
+            reservation: d?.reservation != null ? Number(d.reservation) : null,
+            half_spread_raw: d?.half_spread_raw != null ? Number(d.half_spread_raw) : null,
+            half_spread: d?.half_spread != null ? Number(d.half_spread) : null,
+            bid_quote: d?.bid_quote != null ? Number(d.bid_quote) : null,
+            ask_quote: d?.ask_quote != null ? Number(d.ask_quote) : null,
+            buy_guard: d ? Boolean(d.buy_guard) : null,
+            sell_guard: d ? Boolean(d.sell_guard) : null,
+            n_legs: d?.n_legs != null ? Number(d.n_legs) : null,
+            vpin_widened: d ? Boolean(d.vpin_widened) : false,
+          },
+        });
+      }
+      if (!ctrl.signal.aborted) {
+        analyticsTimer = setTimeout(tickAnalytics, ANALYTICS_INTERVAL_MS);
+      }
+    };
+
     // Kick all polls immediately so the panels populate on first paint.
     tickPositions();
     tickAccount();
     tickOpenOrders();
+    tickAnalytics();
 
     return () => {
       ctrl.abort();
       if (positionsTimer)  clearTimeout(positionsTimer);
       if (accountTimer)    clearTimeout(accountTimer);
       if (openOrdersTimer) clearTimeout(openOrdersTimer);
+      if (analyticsTimer)  clearTimeout(analyticsTimer);
     };
   }, [dispatch]);
 }

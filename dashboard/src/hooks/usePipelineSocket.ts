@@ -178,6 +178,44 @@ function parseMessage(raw: string): PipelineAction | null {
     // they are served via REST /state/positions and /state/account
     // (see useStatePoll). Any stray events on these topics are ignored.
 
+    case "analytics": {
+      const instrument = (data.instrument as Record<string, unknown>)?.symbol
+        ?? String(data.instrument ?? "");
+      return {
+        type: "ANALYTICS",
+        payload: {
+          ts,
+          strategy_id: String(data.strategy_id ?? ""),
+          instrument: String(instrument),
+          bid_price: Number(data.bid_price ?? 0),
+          ask_price: Number(data.ask_price ?? 0),
+          bid_size: Number(data.bid_size ?? 0),
+          ask_size: Number(data.ask_size ?? 0),
+          mid_price: Number(data.mid_price ?? 0),
+          microprice: Number(data.microprice ?? 0),
+          sigma: Number(data.sigma ?? 0),
+          obi: data.obi != null ? Number(data.obi) : null,
+          ofi: data.ofi != null ? Number(data.ofi) : null,
+          vpin: data.vpin != null ? Number(data.vpin) : null,
+          // L2 fields not yet available from WS analytics event (split format); REST poll provides these
+          obi_l2: data.obi_l2 != null ? Number(data.obi_l2) : null,
+          depth_bid_total: data.depth_bid_total != null ? Number(data.depth_bid_total) : null,
+          depth_ask_total: data.depth_ask_total != null ? Number(data.depth_ask_total) : null,
+          vpin_widened: Boolean(data.vpin_widened),
+          inventory: Number(data.inventory ?? 0),
+          reservation_raw: Number(data.reservation_raw ?? 0),
+          reservation: Number(data.reservation ?? 0),
+          half_spread_raw: Number(data.half_spread_raw ?? 0),
+          half_spread: Number(data.half_spread ?? 0),
+          bid_quote: data.bid_quote != null ? Number(data.bid_quote) : null,
+          ask_quote: data.ask_quote != null ? Number(data.ask_quote) : null,
+          buy_guard: Boolean(data.buy_guard),
+          sell_guard: Boolean(data.sell_guard),
+          n_legs: Number(data.n_legs ?? 0),
+        },
+      };
+    }
+
     case "logs": {
       const d = data as { level?: string; logger?: string; message?: string; extra?: Record<string,string> };
       return {
