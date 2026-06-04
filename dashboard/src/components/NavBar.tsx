@@ -29,6 +29,7 @@ export default function NavBar({ status }: NavBarProps) {
         <Box sx={{ display: "flex", gap: 1, flexGrow: 1 }}>
           {[
             { to: "/", label: "Dashboard" },
+            { to: "/analytics", label: "Analytics" },
             { to: "/logs", label: "Logs" },
             { to: "/killswitch", label: "Kill Switch" },
             { to: "/backtest", label: "Backtest" },
