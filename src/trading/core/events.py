@@ -580,57 +580,69 @@ class OpenOrdersSnapshotEvent(BaseEvent):
     exposures: tuple[WorkingExposure, ...] = ()
     orders: tuple[OpenOrderDetail, ...] = ()
 
-class MicrostructureSnapshotEvent(BaseEvent):
-    """ Per-tick microstructure snapshot from raw market data. 
 
-    Published by AnalyticsService after each TickEvent - indepdentn of which strategy is running. 
-    All indicator fields nullable until indicator has warmed up. 
-    
+# --- Analytics -------------------------------------------------------------
+
+
+class MicrostructureSnapshotEvent(BaseEvent):
+    """Per-tick microstructure snapshot computed from raw market data.
+
+    Published by AnalyticsService after each TickEvent — independent of
+    which strategy (if any) is running. All indicator fields are nullable
+    until the indicator has warmed up.
     """
 
     event_type: Literal["microstructure_snapshot"] = "microstructure_snapshot"
     instrument: Instrument
 
-    # Raw top-of-book data from the tick
+    # Raw top-of-book
     bid_price: float
     ask_price: float
     bid_size: float
-    ask_size: float 
+    ask_size: float
     mid_price: float
     microprice: float
-   
-   # Indicators 
-    ofi: float | None = None # order flow imbalance
-    obi: float | None = None # order book imbalance
-    vpin: float | None = None # volume-synchronized probability of informed trading
-    sigma: float | None = None # EWMA volatility
+
+    # L1 indicators (None until warmed up)
+    sigma: float | None  # EWMA volatility
+    obi: float | None    # order book imbalance (top-of-book only)
+    ofi: float | None    # order flow imbalance
+    vpin: float | None   # volume-synchronized prob of informed trading
+
+    # L2 depth metrics (None until depth stream bootstrapped)
+    obi_l2: float | None = None          # OBI across top-10 bid/ask levels
+    depth_bid_total: float | None = None  # sum of bid sizes across top-10 levels
+    depth_ask_total: float | None = None  # sum of ask sizes across top-10 levels
+
 
 class StrategyDiagnosticsEvent(BaseEvent):
-    """Per tick strategy decision chain, published by strategies that opt in. 
+    """Per-tick strategy decision chain, published by strategies that opt in.
 
-    Strategies expose get_strategy_diagnostics() -> dict | None; Registry publishes this event when a non-None dict is returned after TickEvent dispatched.
-    Fields are strategy-specific - AS strat here as the canonical example.
+    Strategies expose get_strategy_diagnostics() -> dict | None; the registry
+    publishes this event when a non-None dict is returned after TickEvent
+    dispatch. Fields are strategy-specific — AS internals shown here as the
+    canonical example.
     """
 
     event_type: Literal["strategy_diagnostics"] = "strategy_diagnostics"
     strategy_id: StrategyId
     instrument: Instrument
 
-    # Inventory and A-S formula Internals
+    # Inventory and A-S formula internals
     inventory: float
     reservation_raw: float
     reservation: float
     half_spread_raw: float
     half_spread: float
 
-    # Final quotes (None if side supressed by risk)
+    # Final quotes (None if side suppressed)
     bid_quote: float | None
     ask_quote: float | None
     buy_guard: bool
     sell_guard: bool
     n_legs: int
 
-    # Strategy level VPIN threshold decision 
+    # Strategy-level VPIN threshold decision (not raw microstructure value)
     vpin_widened: bool
 
 
@@ -674,6 +686,8 @@ __all__ = [
     "AccountSnapshotEvent",
     "AmendRejected",
     "AmendRequest",
+    "MicrostructureSnapshotEvent",
+    "StrategyDiagnosticsEvent",
     "ApprovedLeg",
     "BaseEvent",
     "CancelRejected",
@@ -683,7 +697,6 @@ __all__ = [
     "FillEvent",
     "FundingRateEvent",
     "KillSwitchEvent",
-    "MicrostructureSnapshotEvent",
     "OrderAcknowledged",
     "OrderAmended",
     "OrderBookEvent",
@@ -701,7 +714,6 @@ __all__ = [
     "RiskAlertEvent",
     "RiskDecision",
     "SignalEvent",
-    "StrategyDiagnosticsEvent",
     "TickEvent",
     "TradeEvent",
     "VenuePosition",
