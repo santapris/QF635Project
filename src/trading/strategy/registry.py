@@ -33,6 +33,7 @@ from ..core.events import (
     OrderBookEvent,
     PositionUpdateEvent,
     SignalEvent,
+    StrategyDiagnosticsEvent,
     TickEvent,
     TradeEvent,
 )
@@ -224,6 +225,14 @@ class StrategyRegistry:
             return
         for signal in signals or ():
             await self._bus.publish(Topic.SIGNALS, signal)
+
+        if isInstance(event, TickEvent):
+            diagnostics = strategy.get_strategy_diagnostics()
+            if diagnostics is not None:
+                try: 
+                    await self._bus.publish(Topic.ANALYTICS, StrategyDiagnosticsEvent(**diagnostics))
+                except Exception:
+                    _log.warning("strategy_diagnostics_publish_failed", strategy_id=sid, error=structlog.exc_info(), exc_info=True)
 
     # --- Helpers -----------------------------------------------------------
 

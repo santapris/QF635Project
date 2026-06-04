@@ -84,6 +84,16 @@ class AbstractStrategy(ABC):
         self, event: PositionUpdateEvent, ctx: StrategyContext
     ) -> list[SignalEvent]:
         return []
+    
+    # --- Analytics and diagnostics handlers ------------------------------------------
+
+    def get_strategy_diagnostics(self) -> dict | None:
+        """Return a dict of strategy-specific diagnostics to be included in the StrategyDiagnosticsEvent.
+
+        Registry publishes a StrategyDiagnosticsEvent on every tick with the combined diagnostics from all strategies, so this is a good place to expose any internal state that would be helpful for monitoring or debugging the strategy in real time. The diagnostics will also be included in the historical event log, so they can be used for post-trade analysis and backtesting as well.
+        """
+
+        return None
 
     # --- Helpers ----------------------------------------------------------
 
