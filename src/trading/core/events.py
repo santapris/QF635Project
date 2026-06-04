@@ -580,6 +580,59 @@ class OpenOrdersSnapshotEvent(BaseEvent):
     exposures: tuple[WorkingExposure, ...] = ()
     orders: tuple[OpenOrderDetail, ...] = ()
 
+class MicrostructureSnapshotEvent(BaseEvent):
+    """ Per-tick microstructure snapshot from raw market data. 
+
+    Published by AnalyticsService after each TickEvent - indepdentn of which strategy is running. 
+    All indicator fields nullable until indicator has warmed up. 
+    
+    """
+
+    event_type: Literal["microstructure_snapshot"] = "microstructure_snapshot"
+    instrument: Instrument
+
+    # Raw top-of-book data from the tick
+    bid_price: float
+    ask_price: float
+    bid_size: float
+    ask_size: float 
+    mid_price: float
+    microprice: float
+   
+   # Indicators 
+    ofi: float | None = None # order flow imbalance
+    obi: float | None = None # order book imbalance
+    vpin: float | None = None # volume-synchronized probability of informed trading
+    sigma: float | None = None # EWMA volatility
+
+class StrategyDiagnosticsEvent(BaseEvent):
+    """Per tick strategy decision chain, published by strategies that opt in. 
+
+    Strategies expose get_strategy_diagnostics() -> dict | None; Registry publishes this event when a non-None dict is returned after TickEvent dispatched.
+    Fields are strategy-specific - AS strat here as the canonical example.
+    """
+
+    event_type: Literal["strategy_diagnostics"] = "strategy_diagnostics"
+    strategy_id: StrategyId
+    instrument: Instrument
+
+    # Inventory and A-S formula Internals
+    inventory: float
+    reservation_raw: float
+    reservation: float
+    half_spread_raw: float
+    half_spread: float
+
+    # Final quotes (None if side supressed by risk)
+    bid_quote: float | None
+    ask_quote: float | None
+    buy_guard: bool
+    sell_guard: bool
+    n_legs: int
+
+    # Strategy level VPIN threshold decision 
+    vpin_widened: bool
+
 
 # --- Discriminated union ---------------------------------------------------
 # Use this when receiving events from a serialization layer (Kafka, etc.)
@@ -609,6 +662,8 @@ Event = Annotated[
         AccountSnapshotEvent,
         OpenOrdersSnapshotEvent,
         VenuePositionSnapshotEvent,
+        MicrostructureSnapshotEvent,
+        StrategyDiagnosticsEvent,
     ],
     Field(discriminator="event_type"),
 ]
@@ -628,6 +683,7 @@ __all__ = [
     "FillEvent",
     "FundingRateEvent",
     "KillSwitchEvent",
+    "MicrostructureSnapshotEvent",
     "OrderAcknowledged",
     "OrderAmended",
     "OrderBookEvent",
@@ -645,6 +701,7 @@ __all__ = [
     "RiskAlertEvent",
     "RiskDecision",
     "SignalEvent",
+    "StrategyDiagnosticsEvent",
     "TickEvent",
     "TradeEvent",
     "VenuePosition",
