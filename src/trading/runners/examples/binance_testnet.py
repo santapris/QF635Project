@@ -56,6 +56,8 @@ from trading.risk.rules import (
 from trading.strategy import StrategyRegistry
 from trading.strategy.examples.avellaneda_stoikov import AvellanedaStoikovStrategy
 from trading.config import load_settings
+from trading.analytics import AnalyticsService
+from trading.order_gateways.binance import BinanceL2Feed
 from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
 from trading.runners.examples._runner_config import load_runner_config
 
@@ -184,6 +186,13 @@ async def _amain() -> int:
         else None
     )
 
+    # --- Analytics service --------------------------------------------
+    analytics_service = AnalyticsService(bus=bus)
+    l2_feed = BinanceL2Feed(
+        bus=bus, config=config, rest=rest, symbols=symbols,
+        instruments=instruments, clock=clock,
+    )
+
     # --- Event logging ------------------------------------------------
     # Same subscriptions in every environment. Market data is intentionally
     # excluded — see heartbeat below for the "is data flowing?" signal.
@@ -201,6 +210,8 @@ async def _amain() -> int:
     await listen_keys.start()
     await user_data.start()
     await bus.start()
+    await analytics_service.start()
+    await l2_feed.start()
     await heartbeat.start()
     # Dashboard must start before reconciler so it subscribes to Topic.ACCOUNT
     # before the reconciler's first reconcile_once() publishes a snapshot.
@@ -242,6 +253,8 @@ async def _amain() -> int:
         await heartbeat.stop()
         if dashboard is not None:
             await dashboard.stop()
+        await analytics_service.stop()
+        await l2_feed.stop()
         await feed_handler.stop()
         try:
             await asyncio.wait_for(feed_task, timeout=5)
