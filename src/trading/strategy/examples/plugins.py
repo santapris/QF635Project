@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from ...plugins import strategy_registry
+from .avellaneda_stoikov import AvellanedaStoikovStrategy
 from .market_making import MarketMakingStrategy
 from .mean_reversion import MeanReversionStrategy
 from .momentum import MomentumStrategy
@@ -82,11 +83,49 @@ class _PingPongPlugin:
         )
 
 
+class AvellanedaStoikovParams(_Strict):
+    gamma: float = 0.3
+    k: float = 1.5
+    tau_seconds: float = 300.0
+    half_life_seconds: float = 60.0
+    ofi_window_seconds: float = 10.0
+    ofi_alpha: float = 0.0
+    vpin_bucket_volume: float = 1.0
+    vpin_threshold: float = 0.7
+    vpin_widen_factor: float = 3.0
+    quote_size: Decimal = Decimal("0.01")
+    max_position: Decimal = Decimal("0.5")
+    min_vol: float = 0.5
+    min_price_move_ticks: int = 1
+
+
+class _AvellanedaStoikovPlugin:
+    Params = AvellanedaStoikovParams
+
+    def build(self, params, ctx, *, strategy_id, instruments):
+        return AvellanedaStoikovStrategy(
+            strategy_id=strategy_id, instruments=instruments,
+            gamma=params.gamma, k=params.k,
+            tau_seconds=params.tau_seconds,
+            half_life_seconds=params.half_life_seconds,
+            ofi_window_seconds=params.ofi_window_seconds,
+            ofi_alpha=params.ofi_alpha,
+            vpin_bucket_volume=params.vpin_bucket_volume,
+            vpin_threshold=params.vpin_threshold,
+            vpin_widen_factor=params.vpin_widen_factor,
+            quote_size=params.quote_size,
+            max_position=params.max_position,
+            min_vol=params.min_vol,
+            min_price_move_ticks=params.min_price_move_ticks,
+        )
+
+
 def register() -> None:
     strategy_registry.register("momentum", _MomentumPlugin())
     strategy_registry.register("mean_reversion", _MeanReversionPlugin())
     strategy_registry.register("market_making", _MarketMakingPlugin())
     strategy_registry.register("ping_pong", _PingPongPlugin())
+    strategy_registry.register("avellaneda_stoikov", _AvellanedaStoikovPlugin())
 
 
 register()

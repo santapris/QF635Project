@@ -29,6 +29,32 @@ Parameters (all from TOML config as str → parsed in __init__):
                           cancel-replace via amend, re-quoting on every
                           sub-tick drift floods the venue rate limit and
                           widens the amend-vs-fill race window
+
+VPIN toxicity gate — what it is and when it fires
+--------------------------------------------------
+VPIN (Volume-Synchronized Probability of Informed Trading, Easley et al. 2012)
+measures whether recent trade flow is one-sided (informed) or balanced (noise).
+
+Algorithm:
+  - Accumulate trade volume into equal-size buckets (vpin_bucket_volume).
+  - Classify each trade as buy or sell via BVC (bulk-volume classification).
+  - Bucket toxicity = |V_buy - V_sell| / bucket_volume  ∈ [0, 1].
+  - VPIN = rolling mean of toxicity over the last 50 buckets.
+
+Interpretation:
+  VPIN ≈ 0.0  →  balanced flow (noise traders, normal quoting safe)
+  VPIN ≈ 0.5  →  moderate imbalance (increasing adverse-selection risk)
+  VPIN ≈ 1.0  →  strongly one-sided flow (informed trader likely present)
+
+When VPIN > vpin_threshold the strategy widens half_spread by vpin_widen_factor
+to compensate for expected adverse selection. Logs "vpin_widening_triggered" at
+INFO so the event is visible without DEBUG logging.
+
+Why VPIN_WIDE stays silent on testnet:
+  Binance testnet has no real informed traders. Trade flow is synthetic and
+  balanced → VPIN stays near 0 and never reaches the 0.7 threshold. To
+  observe widening: lower vpin_threshold to ~0.3, or run on live market data
+  during a news/trend event with genuine one-sided flow.
 """
 
 from __future__ import annotations
@@ -90,9 +116,13 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         self._as = AvellanedaStoikov(gamma=gamma, k=k, tau_seconds=tau_seconds)
         self._obi = OBI()
         self._vpin = VPIN(bucket_volume=vpin_bucket_volume)
+        # Track previous widening state to log transitions only (not every tick)
+        self._vpin_widened_prev: bool = False
         # OFI needs clock; injected on first on_tick via context
         self._ofi: OFI | None = None
         self._ofi_window_seconds = ofi_window_seconds
+        # Latest diagnostics dict for the registry to publish
+        self._latest_diagnostics: dict | None = None
 
     @classmethod
     def from_config(
@@ -144,17 +174,38 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         sigma_raw = self._vol.update(micro, ts_ns)
         sigma = max(self._min_vol, sigma_raw) if sigma_raw is not None else self._min_vol
 
-        ofi_val = self._ofi.update(bid, bid_size, ask, ask_size, ts_ns) or 0.0
-        self._obi.update(bid_size, ask_size)
+        ofi_raw = self._ofi.update(bid, bid_size, ask, ask_size, ts_ns)
+        ofi_val = ofi_raw or 0.0
+        obi_val = self._obi.update(bid_size, ask_size)
 
-        quotes = self._as.quotes(mid=micro, inventory=self._inventory(event, ctx), sigma=sigma)
+        inventory = self._inventory(event, ctx)
+        quotes = self._as.quotes(mid=micro, inventory=inventory, sigma=sigma)
 
-        reservation = quotes.reservation + self._ofi_alpha * ofi_val
-        half_spread = quotes.half_spread
+        reservation_raw = quotes.reservation
+        reservation = reservation_raw + self._ofi_alpha * ofi_val
+        half_spread_raw = quotes.half_spread
+        half_spread = half_spread_raw
 
         vpin_val = self._vpin.value
-        if vpin_val is not None and vpin_val > self._vpin_threshold:
+        vpin_widened = vpin_val is not None and vpin_val > self._vpin_threshold
+        if vpin_widened:
             half_spread *= self._vpin_widen_factor
+        if vpin_widened and not self._vpin_widened_prev:
+            ctx.logger.info(
+                "vpin_widening_triggered",
+                vpin=round(vpin_val, 4),  # type: ignore[arg-type]
+                threshold=self._vpin_threshold,
+                widen_factor=self._vpin_widen_factor,
+                half_spread_before=round(half_spread_raw, 4),
+                half_spread_after=round(half_spread, 4),
+            )
+        elif not vpin_widened and self._vpin_widened_prev:
+            ctx.logger.info(
+                "vpin_widening_cleared",
+                vpin=round(vpin_val, 4) if vpin_val is not None else None,
+                threshold=self._vpin_threshold,
+            )
+        self._vpin_widened_prev = vpin_widened
 
         instrument = event.instrument
         tick = instrument.tick_size
@@ -166,8 +217,6 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         best_ask = event.ask_price
 
         legs: list[OrderLeg] = []
-        inventory = self._inventory(event, ctx)
-
         buy_guard = post_only_guard(Side.BUY, bid_price, best_bid, best_ask)
         sell_guard = post_only_guard(Side.SELL, ask_price, best_bid, best_ask)
 
@@ -182,13 +231,18 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
             or abs(ask_price - self._last_ask) >= min_move
         )
 
+        bid_quote: float | None = None
+        ask_quote: float | None = None
+
         if inventory < float(self._max_position) and buy_guard and bid_moved:
             legs.append(self._make_leg(Side.BUY, bid_price))
             self._last_bid = bid_price
+            bid_quote = float(bid_price)
 
         if inventory > -float(self._max_position) and sell_guard and ask_moved:
             legs.append(self._make_leg(Side.SELL, ask_price))
             self._last_ask = ask_price
+            ask_quote = float(ask_price)
 
         ctx.logger.debug(
             "as_tick",
@@ -196,18 +250,37 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
             arith_mid=round((bid + ask) / 2, 4),
             sigma=round(sigma, 6),
             ofi=round(ofi_val, 4),
-            obi=round(self._obi.value or 0.0, 4),
+            obi=round(obi_val or 0.0, 4),
             vpin=round(vpin_val, 4) if vpin_val is not None else None,
-            vpin_widened=vpin_val is not None and vpin_val > self._vpin_threshold,
-            reservation=round(quotes.reservation, 4),
+            vpin_widened=vpin_widened,
+            reservation=round(reservation, 4),
             half_spread=round(half_spread, 4),
-            bid_quote=float(bid_price),
-            ask_quote=float(ask_price),
+            bid_quote=bid_quote,
+            ask_quote=ask_quote,
             inventory=round(inventory, 6),
             buy_guard=buy_guard,
             sell_guard=sell_guard,
             n_legs=len(legs),
         )
+
+        self._latest_diagnostics = {
+            "ts_event": event.ts_event,
+            "ts_ingest": ctx.clock.now_ns(),
+            "source": f"strategy:{ctx.strategy_id}",
+            "strategy_id": ctx.strategy_id,
+            "instrument": event.instrument,
+            "inventory": inventory,
+            "reservation_raw": reservation_raw,
+            "reservation": reservation,
+            "half_spread_raw": half_spread_raw,
+            "half_spread": half_spread,
+            "bid_quote": bid_quote,
+            "ask_quote": ask_quote,
+            "buy_guard": buy_guard,
+            "sell_guard": sell_guard,
+            "n_legs": len(legs),
+            "vpin_widened": vpin_widened,
+        }
 
         if not legs:
             return []
@@ -219,6 +292,7 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
             strategy_id=ctx.strategy_id,
             instrument=event.instrument,
             legs=tuple(legs),
+            # TODO - the inventory always remains the same - not clear if it's an issue with the position engine or the inventory calculation
             rationale=f"as-mm inv={inventory:.6f}",
         )]
 
@@ -241,6 +315,9 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
             fill_qty=event.fill_quantity,
         )
         return []
+
+    def get_strategy_diagnostics(self) -> dict | None:
+        return self._latest_diagnostics
 
     def _inventory(self, event: TickEvent, ctx: StrategyContext) -> float:
         position = ctx.portfolio.get_position(event.instrument, ctx.strategy_id)
