@@ -55,7 +55,9 @@ import structlog
 from ..core.events import (
     AccountSnapshotEvent,
     BaseEvent,
+    MicrostructureSnapshotEvent,
     OpenOrdersSnapshotEvent,
+    StrategyDiagnosticEvent,
     VenuePositionSnapshotEvent,
 )
 from ..event_bus.base import AbstractEventBus, Topic
@@ -182,6 +184,10 @@ class DashboardServer:
         # Latest exchange-reported net positions (ground truth, for the
         # 'net' row shown alongside per-strategy positions).
         self._latest_venue_positions: VenuePositionSnapshotEvent | None = None
+        # Latest analytics microstructure snapshot, cached for the REST endpoint.
+        self._latest_microstructure: MicrostructureSnapshotEvent | None = None
+        # Latest strategy diagnostic snapshot, cached for the REST endpoint.
+        self._latest_strategy_diagnostic: StrategyDiagnosticEvent | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -206,6 +212,7 @@ class DashboardServer:
         await self._bus.subscribe(Topic.ACCOUNT, self._on_account_event)
         await self._bus.subscribe(Topic.OPEN_ORDERS, self._on_open_orders_event)
         await self._bus.subscribe(Topic.VENUE_POSITIONS, self._on_venue_positions_event)
+        await self._bus.subscribe(Topic.ANALYTICS, self._on_analytics_event)
 
         # Inject structlog forwarder.
         self._inject_structlog_processor()
@@ -327,6 +334,15 @@ class DashboardServer:
                 for o in snap.orders
             ],
         }
+    
+    def _analytics_payload(self) -> dict[str, Any]:
+        micro = self._latest_microstructure
+        diag = self._latest_strategy_diagnostic
+        return {
+            "timestamp": _now_iso(),
+            "microstructure": micro.model_dump(mode="json") if micro else None,
+            "strategy_diagnostic": diag.model_dump(mode="json") if diag else None,
+        }
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -351,6 +367,9 @@ class DashboardServer:
 
         async def open_orders_endpoint(request: Request) -> JSONResponse:
             return JSONResponse(self._open_orders_payload())
+
+        async def analytics_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._analytics_payload())
 
         async def websocket_endpoint(ws: WebSocket) -> None:
             await ws.accept()
@@ -384,6 +403,7 @@ class DashboardServer:
                 Route("/state/positions", positions_endpoint, methods=["GET"]),
                 Route("/state/account", account_endpoint, methods=["GET"]),
                 Route("/state/open_orders", open_orders_endpoint, methods=["GET"]),
+                Route("/state/analytics", analytics_endpoint, methods=["GET"]),
                 WebSocketRoute("/ws", websocket_endpoint),
             ],
             middleware=middleware,
@@ -409,6 +429,12 @@ class DashboardServer:
     async def _on_venue_positions_event(self, event: BaseEvent) -> None:
         if isinstance(event, VenuePositionSnapshotEvent):
             self._latest_venue_positions = event
+    
+    Async def _on_analytics_event(self, event: BaseEvent) -> None:
+        if isinstance(event, MicrostructureSnapshotEvent):
+            self._latest_microstructure = event
+        elif isinstance(event, StrategyDiagnosticEvent):
+            self._latest_strategy_diagnostic = event
 
     async def _broadcast_loop(self) -> None:
         """Drain the broadcast queue and send to all connected clients."""

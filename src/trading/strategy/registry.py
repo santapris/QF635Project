@@ -226,7 +226,7 @@ class StrategyRegistry:
         for signal in signals or ():
             await self._bus.publish(Topic.SIGNALS, signal)
 
-        if isInstance(event, TickEvent):
+        if isinstance(event, TickEvent):
             diagnostics = strategy.get_strategy_diagnostics()
             if diagnostics is not None:
                 try: 
