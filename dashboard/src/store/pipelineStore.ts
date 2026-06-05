@@ -279,6 +279,7 @@ export type PipelineAction =
   | { type: "POSITIONS_SNAPSHOT"; payload: { positions: PositionRow[]; venueNet: VenueNetRow[] } }
   | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
+  | { type: "LOGS_BATCH"; payload: LogRow[] }
   | { type: "CLEAR_LOGS" }
   | { type: "ANALYTICS"; payload: AnalyticsSnapshot };
 
@@ -291,15 +292,22 @@ const ANALYTICS_SAMPLE_INTERVAL_MS = 250;
 /** Maximum analytics history points retained in memory (~75s window at 4 Hz). */
 const ANALYTICS_HISTORY_LIMIT = 300;
 
+// Prepend item and trim to limit in one allocation.
 function cap<T>(arr: T[], item: T, limit: number): T[] {
-  const next = [item, ...arr];
-  return next.length > limit ? next.slice(0, limit) : next;
+  if (arr.length < limit) return [item, ...arr];
+  const next = new Array<T>(limit);
+  next[0] = item;
+  for (let i = 1; i < limit; i++) next[i] = arr[i - 1];
+  return next;
 }
 
 function capDedup<T extends { id: string }>(arr: T[], item: T, limit: number): T[] {
   const filtered = arr.filter((x) => x.id !== item.id);
-  const next = [item, ...filtered];
-  return next.length > limit ? next.slice(0, limit) : next;
+  if (filtered.length < limit) return [item, ...filtered];
+  const next = new Array<T>(limit);
+  next[0] = item;
+  for (let i = 1; i < limit; i++) next[i] = filtered[i - 1];
+  return next;
 }
 
 export function pipelineReducer(
@@ -410,6 +418,13 @@ export function pipelineReducer(
 
     case "LOG":
       return { ...state, logs: cap(state.logs, action.payload, 500) };
+
+    case "LOGS_BATCH": {
+      if (action.payload.length === 0) return state;
+      // Prepend the batch (newest first) then trim to limit in one pass.
+      const combined = [...action.payload, ...state.logs];
+      return { ...state, logs: combined.length > 500 ? combined.slice(0, 500) : combined };
+    }
 
     case "CLEAR_LOGS":
       return { ...state, logs: [] };

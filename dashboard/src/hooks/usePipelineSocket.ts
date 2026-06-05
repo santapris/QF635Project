@@ -7,6 +7,14 @@ import { PipelineAction } from "../store/pipelineStore";
 
 const WS_URL = "ws://localhost:8765/ws";
 const MAX_BACKOFF_MS = 30_000;
+// Minimum ms between TICK dispatches per instrument. Ticks arriving faster
+// than this are coalesced (latest wins) so the reducer doesn't run at the
+// full market-data rate (can be 100s/sec) and cause heap churn.
+const TICK_THROTTLE_MS = 100;
+// Log records are batched and dispatched as a single LOGS_BATCH action to
+// avoid running the reducer (and triggering a re-render) per log line.
+const LOG_BATCH_MS = 200;
+const LOG_BATCH_MAX = 50; // flush early if batch grows large
 
 /**
  * Normalise any timestamp the backend may send to milliseconds since epoch.
@@ -241,6 +249,10 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
   const backoffRef = useRef(1000);
   const unmountedRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-instrument throttle: maps instrument -> { lastDispatchMs, pendingTimer, pendingAction }
+  const tickThrottleRef = useRef<Map<string, { lastMs: number; timer: ReturnType<typeof setTimeout> | null; pending: PipelineAction }>>(new Map());
+  // Log batching: accumulate log rows and flush as a single LOGS_BATCH dispatch.
+  const logBatchRef = useRef<{ rows: import("../store/pipelineStore").LogRow[]; timer: ReturnType<typeof setTimeout> | null }>({ rows: [], timer: null });
 
   const connect = useCallback(() => {
     if (unmountedRef.current) return;
@@ -256,7 +268,64 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
 
     ws.onmessage = (e) => {
       const action = parseMessage(e.data as string);
-      if (action) dispatch(action);
+      if (!action) return;
+
+      if (action.type === "TICK") {
+        const instrument = action.payload.instrument;
+        const now = Date.now();
+        const entry = tickThrottleRef.current.get(instrument);
+
+        if (!entry) {
+          // First tick for this instrument — dispatch immediately.
+          tickThrottleRef.current.set(instrument, { lastMs: now, timer: null, pending: action });
+          dispatch(action);
+        } else if (now - entry.lastMs >= TICK_THROTTLE_MS) {
+          // Enough time has passed — dispatch and clear any pending coalesce timer.
+          if (entry.timer !== null) {
+            clearTimeout(entry.timer);
+            entry.timer = null;
+          }
+          entry.lastMs = now;
+          entry.pending = action;
+          dispatch(action);
+        } else {
+          // Too soon — coalesce: replace pending, schedule a flush if not already pending.
+          entry.pending = action;
+          if (entry.timer === null) {
+            const delay = TICK_THROTTLE_MS - (now - entry.lastMs);
+            entry.timer = setTimeout(() => {
+              if (unmountedRef.current) return;
+              entry.timer = null;
+              entry.lastMs = Date.now();
+              dispatch(entry.pending);
+            }, delay);
+          }
+        }
+        return;
+      }
+
+      if (action.type === "LOG") {
+        const batch = logBatchRef.current;
+        batch.rows.push(action.payload);
+        if (batch.rows.length >= LOG_BATCH_MAX) {
+          // Batch full — flush immediately.
+          if (batch.timer !== null) { clearTimeout(batch.timer); batch.timer = null; }
+          const rows = batch.rows;
+          batch.rows = [];
+          dispatch({ type: "LOGS_BATCH", payload: rows });
+        } else if (batch.timer === null) {
+          batch.timer = setTimeout(() => {
+            if (unmountedRef.current) return;
+            batch.timer = null;
+            const rows = batch.rows;
+            batch.rows = [];
+            if (rows.length > 0) dispatch({ type: "LOGS_BATCH", payload: rows });
+          }, LOG_BATCH_MS);
+        }
+        return;
+      }
+
+      dispatch(action);
     };
 
     ws.onclose = () => {
@@ -282,6 +351,17 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
         clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;
       }
+      // Cancel any pending tick coalesce timers.
+      for (const entry of tickThrottleRef.current.values()) {
+        if (entry.timer !== null) clearTimeout(entry.timer);
+      }
+      tickThrottleRef.current.clear();
+      // Cancel pending log batch timer.
+      if (logBatchRef.current.timer !== null) {
+        clearTimeout(logBatchRef.current.timer);
+        logBatchRef.current.timer = null;
+      }
+      logBatchRef.current.rows = [];
       const ws = wsRef.current;
       wsRef.current = null;
       if (ws) {
