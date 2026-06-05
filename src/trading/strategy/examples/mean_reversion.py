@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from ...core.events import SignalEvent, TickEvent
+from ...core.events import OrderLeg, SignalEvent, TickEvent
 from ...core.instruments import Instrument
 from ...core.types import OrderType, Side, StrategyId, TimeInForce
 from ..base import AbstractStrategy
@@ -107,10 +107,14 @@ class MeanReversionStrategy(AbstractStrategy):
             source=f"strategy:{ctx.strategy_id}",
             strategy_id=ctx.strategy_id,
             instrument=event.instrument,
-            side=side,
-            target_quantity=quantity,
-            order_type=OrderType.MARKET,
-            time_in_force=TimeInForce.IOC,
+            legs=(
+                OrderLeg(
+                    side=side,
+                    quantity=quantity,
+                    order_type=OrderType.MARKET,
+                    time_in_force=TimeInForce.IOC,
+                ),
+            ),
             rationale=rationale,
         )
 
