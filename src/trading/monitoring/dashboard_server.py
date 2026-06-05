@@ -57,7 +57,7 @@ from ..core.events import (
     BaseEvent,
     MicrostructureSnapshotEvent,
     OpenOrdersSnapshotEvent,
-    StrategyDiagnosticEvent,
+    StrategyDiagnosticsEvent,
     VenuePositionSnapshotEvent,
 )
 from ..event_bus.base import AbstractEventBus, Topic
@@ -187,7 +187,7 @@ class DashboardServer:
         # Latest analytics microstructure snapshot, cached for the REST endpoint.
         self._latest_microstructure: MicrostructureSnapshotEvent | None = None
         # Latest strategy diagnostic snapshot, cached for the REST endpoint.
-        self._latest_strategy_diagnostic: StrategyDiagnosticEvent | None = None
+        self._latest_strategy_diagnostic: StrategyDiagnosticsEvent | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -430,10 +430,10 @@ class DashboardServer:
         if isinstance(event, VenuePositionSnapshotEvent):
             self._latest_venue_positions = event
     
-    Async def _on_analytics_event(self, event: BaseEvent) -> None:
+    async def _on_analytics_event(self, event: BaseEvent) -> None:
         if isinstance(event, MicrostructureSnapshotEvent):
             self._latest_microstructure = event
-        elif isinstance(event, StrategyDiagnosticEvent):
+        elif isinstance(event, StrategyDiagnosticsEvent):
             self._latest_strategy_diagnostic = event
 
     async def _broadcast_loop(self) -> None:
