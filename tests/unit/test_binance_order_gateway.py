@@ -346,6 +346,61 @@ async def test_order_gateway_sends_cancel(btc_binance):
     assert params["origClientOrderId"] == "cli-abc"
 
 
+@pytest.mark.parametrize("gone_code", [-2011, -2013])
+async def test_cancel_of_gone_order_publishes_cancelled_not_rejected(
+    btc_binance, gone_code
+):
+    """A cancel that fails because the order is already gone (-2011 unknown
+    order / -2013 does not exist) must publish OrderCancelled, not
+    CancelRejected. CancelRejected would roll the OMS order back to ACKNOWLEDGED
+    and the reconciler would re-cancel it forever against an order Binance no
+    longer has — the tracked-but-gone desync (orders stuck PENDING_CANCEL while
+    the venue shows none)."""
+    from trading.core.events import CancelRejected, OrderCancelled
+
+    rest = _FakeREST()
+    rest.responses.append(OrderError("Unknown order sent.", code=gone_code))
+    bus, gw = _gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    cancel = CancelRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("cli-gone"),
+        instrument=btc_binance,
+    )
+    await bus.publish(Topic.ORDERS, cancel)
+
+    published = bus.published_on(Topic.ORDERS)
+    assert not [e for e in published if isinstance(e, CancelRejected)]
+    cancels = [e for e in published if isinstance(e, OrderCancelled)]
+    assert len(cancels) == 1
+    assert str(cancels[0].client_order_id) == "cli-gone"
+
+
+async def test_cancel_rejected_for_other_errors_still_rejects(btc_binance):
+    """A cancel failing for a reason other than order-gone leaves the order
+    genuinely live, so we publish CancelRejected and let the OMS retry."""
+    from trading.core.events import CancelRejected, OrderCancelled
+
+    rest = _FakeREST()
+    rest.responses.append(OrderError("some other failure", code=-1234))
+    bus, gw = _gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    cancel = CancelRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("cli-live"),
+        instrument=btc_binance,
+    )
+    await bus.publish(Topic.ORDERS, cancel)
+
+    published = bus.published_on(Topic.ORDERS)
+    assert not [e for e in published if isinstance(e, OrderCancelled)]
+    rejs = [e for e in published if isinstance(e, CancelRejected)]
+    assert len(rejs) == 1
+    assert str(rejs[0].client_order_id) == "cli-live"
+
+
 async def test_futures_amend_publishes_venue_resulting_values(btc_binance):
     """The futures PUT amend publishes OrderAmended carrying the price/qty the
     venue actually rested at (from the PUT response), not the requested values.

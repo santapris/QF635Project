@@ -225,6 +225,43 @@ class RiskEngine:
             for r in results:
                 if r.approved_quantity is not None and r.approved_quantity < qty:
                     qty = Quantity(r.approved_quantity)
+
+            # Min-notional backstop. A clamp (e.g. MaxPosition trimming a buy to
+            # fit remaining headroom) can drive the final size below the venue's
+            # minimum notional, producing an order the exchange rejects every
+            # tick (Binance -4164). Peer rules can't catch this — they see the
+            # leg's *requested* quantity, not the post-clamp result — so the
+            # check lives here, after the tightest clamp is known. Drop the leg
+            # rather than emit a doomed order. No price reference → can't judge,
+            # so let it through and rely on the venue.
+            min_notional = event.instrument.min_notional
+            ref_price = leg.price
+            if (
+                min_notional is not None
+                and ref_price is not None
+                and ref_price > 0
+                and ref_price * qty < min_notional
+            ):
+                _log.info(
+                    "leg_dropped_below_min_notional",
+                    strategy_id=event.strategy_id,
+                    leg_id=leg.leg_id,
+                    side=leg.side.value,
+                    clamped_qty=str(qty),
+                    notional=str(ref_price * qty),
+                    min_notional=str(min_notional),
+                )
+                rejected.append(RejectedLeg(
+                    leg_id=leg.leg_id,
+                    side=leg.side,
+                    rule_name="min_notional",
+                    reason=(
+                        f"clamped notional {ref_price * qty} < venue minimum "
+                        f"{min_notional} (clamped qty {qty})"
+                    ),
+                ))
+                continue
+
             approved.append(ApprovedLeg(
                 leg_id=leg.leg_id, side=leg.side, approved_quantity=qty,
             ))

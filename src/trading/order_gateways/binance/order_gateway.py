@@ -238,9 +238,37 @@ class BinanceOrderGateway(AbstractOrderGateway):
                 params=params, signed=True, weight=_W_CANCEL_ORDER,
             )
         except OrderError as exc:
-            # Cancel can fail because order doesn't exist (already done).
-            # We translate that to a rejection of the cancel itself — the
-            # OMS state for the order will catch up via the fill stream.
+            code = exc.context.get("code")
+            # -2011 "Unknown order sent" / -2013 "Order does not exist": the
+            # order is already gone (filled or cancelled between our snapshot
+            # and the DELETE landing). The cancel has *achieved its goal* — the
+            # order is not resting on the venue. Emit OrderCancelled so the OMS
+            # terminalizes it. Publishing CancelRejected here instead would roll
+            # the order back to ACKNOWLEDGED (see _handle_cancel_rejected), the
+            # reconciler would see it as resting and re-cancel, and we'd loop
+            # forever against an order that no longer exists on Binance — the
+            # exact tracked-but-gone desync this guards against. Mirrors the
+            # amend "order gone" paths above.
+            if code in (-2011, -2013):
+                _log.info(
+                    "binance_cancel_order_already_gone",
+                    order_id=req.order_id,
+                    reason=exc.message,
+                )
+                await self._safe_publish(
+                    Topic.ORDERS,
+                    OrderCancelled(
+                        ts_event=self._clock.now_ns(),
+                        ts_ingest=self._clock.now_ns(),
+                        source=self.venue,
+                        order_id=req.order_id,
+                        client_order_id=req.client_order_id,
+                        reason=f"cancel revealed order gone: {exc.message}",
+                    ),
+                )
+                return
+            # Other order errors leave the order genuinely live — reject the
+            # cancel so the OMS rolls back to ACKNOWLEDGED and retries.
             _log.info(
                 "binance_cancel_rejected",
                 order_id=req.order_id,

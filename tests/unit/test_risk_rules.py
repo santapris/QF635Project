@@ -210,3 +210,108 @@ def test_throttle_rejects_above_cap(sim_clock, btc, strategy_id) -> None:
         legs=(_leg(),),
     )
     assert not rule.evaluate(sig, sig.legs[0], state).approved
+
+
+# --- Engine: min-notional backstop -----------------------------------------
+
+def _btc_min_notional(min_notional: str) -> "Instrument":
+    """A BTC instrument carrying a venue minimum notional (Binance -4164)."""
+    from trading.core import AssetType, Instrument
+
+    return Instrument(
+        symbol="BTC-USDT", exchange="BINANCE", asset_type=AssetType.SPOT,
+        base_currency="BTC", quote_currency="USDT",
+        tick_size=Decimal("0.01"), lot_size=Decimal("0.0001"),
+        min_notional=Decimal(min_notional),
+    )
+
+
+async def test_engine_drops_leg_clamped_below_min_notional(clock, strategy_id) -> None:
+    """A MaxPosition clamp that drives the buy leg below the venue's min
+    notional must be DROPPED by the engine, not approved. Otherwise the OMS
+    places a dust order the venue rejects every tick (Binance -4164), the exact
+    reject loop seen in production when inventory sits just under the long cap.
+    """
+    from trading.core import RiskDecision
+    from trading.event_bus import MemoryBus, Topic
+    from trading.risk import RiskEngine
+
+    btc = _btc_min_notional("50")  # Binance spot BTCUSDT minimum
+    bus = MemoryBus()
+    risk = RiskEngine(bus=bus, clock=clock)
+    # max_long 8.0008 with a confirmed long of 8 leaves 0.0008 of headroom.
+    risk.register_rules(
+        strategy_id,
+        [MaxPositionRule(max_long=Decimal("8.0008"), max_short=Decimal("10"))],
+    )
+    await risk.start()
+    await bus.publish(Topic.POSITIONS, PositionUpdateEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="t",
+        strategy_id=strategy_id, instrument=btc,
+        quantity=Decimal("8"), average_entry_price=Decimal("61548"),
+        realized_pnl=Decimal(0), unrealized_pnl=Decimal(0),
+        mark_price=Decimal("61548"),
+    ))
+
+    sig = SignalEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="strat",
+        strategy_id=strategy_id, instrument=btc,
+        legs=(OrderLeg(
+            side=Side.BUY, quantity=Decimal("0.002"),
+            price=Decimal("61548"),  # 0.0008 * 61548 = ~49.24 < 50
+            order_type=OrderType.POST_ONLY, time_in_force=TimeInForce.GTC,
+        ),),
+    )
+    await bus.publish(Topic.SIGNALS, sig)
+
+    decisions = [e for e in bus.published_on(Topic.RISK_DECISIONS)
+                 if isinstance(e, RiskDecision)]
+    assert len(decisions) == 1
+    decision = decisions[0]
+    # The only leg was dropped → whole signal rejected, no approved legs.
+    assert not decision.approved
+    assert not decision.approved_legs
+    assert len(decision.rejected_legs) == 1
+    assert decision.rejected_legs[0].rule_name == "min_notional"
+
+
+async def test_engine_keeps_leg_above_min_notional(clock, strategy_id) -> None:
+    """A leg whose clamped notional clears the venue minimum is approved at the
+    clamped quantity — the backstop only drops sub-minimum legs."""
+    from trading.core import RiskDecision
+    from trading.event_bus import MemoryBus, Topic
+    from trading.risk import RiskEngine
+
+    btc = _btc_min_notional("50")
+    bus = MemoryBus()
+    risk = RiskEngine(bus=bus, clock=clock)
+    # 0.01 of headroom -> 0.01 * 61548 = ~615 notional, well above 50.
+    risk.register_rules(
+        strategy_id,
+        [MaxPositionRule(max_long=Decimal("8.01"), max_short=Decimal("10"))],
+    )
+    await risk.start()
+    await bus.publish(Topic.POSITIONS, PositionUpdateEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="t",
+        strategy_id=strategy_id, instrument=btc,
+        quantity=Decimal("8"), average_entry_price=Decimal("61548"),
+        realized_pnl=Decimal(0), unrealized_pnl=Decimal(0),
+        mark_price=Decimal("61548"),
+    ))
+
+    sig = SignalEvent(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="strat",
+        strategy_id=strategy_id, instrument=btc,
+        legs=(OrderLeg(
+            side=Side.BUY, quantity=Decimal("0.5"), price=Decimal("61548"),
+            order_type=OrderType.POST_ONLY, time_in_force=TimeInForce.GTC,
+        ),),
+    )
+    await bus.publish(Topic.SIGNALS, sig)
+
+    decisions = [e for e in bus.published_on(Topic.RISK_DECISIONS)
+                 if isinstance(e, RiskDecision)]
+    assert len(decisions) == 1
+    assert decisions[0].approved
+    assert len(decisions[0].approved_legs) == 1
+    assert decisions[0].approved_legs[0].approved_quantity == Decimal("0.01")

@@ -74,9 +74,14 @@ async def _build_pipeline(bus, clock, btcf):
     risk.register_global_rules([
         InstrumentAllowlistRule(allowed_instrument_ids=["BINANCE:BTC-USDT"]),
     ])
+    # Sizes are scaled so a single quote clears the instrument's min_notional
+    # of 10 at ~50k (0.0002 BTC * 50000 = 10). With the old dust sizes
+    # (quote_size 0.00001 -> 0.50 notional) every order is sub-minimum and is
+    # now correctly dropped by the risk engine's min-notional backstop, so the
+    # pipeline would ack nothing. Keep quote_size < max_order_size < the cap.
     risk.register_rules(_STRATEGY_ID, [
-        MaxPositionRule(max_long=Decimal("0.001"), max_short=Decimal("0.001")),
-        MaxOrderSizeRule(max_quantity=Decimal("0.0001")),
+        MaxPositionRule(max_long=Decimal("0.01"), max_short=Decimal("0.01")),
+        MaxOrderSizeRule(max_quantity=Decimal("0.002")),
         DailyLossLimitRule(max_loss=Decimal("100")),
     ])
     oms = OMSEngine(bus=bus, clock=clock)
@@ -97,8 +102,8 @@ async def _build_pipeline(bus, clock, btcf):
             instruments=[btcf],
             gamma=0.1, k=1.5, tau_seconds=300.0,
             half_life_seconds=10.0, ofi_window_seconds=5.0,
-            quote_size=Decimal("0.00001"),
-            max_position=Decimal("0.001"),
+            quote_size=Decimal("0.0005"),
+            max_position=Decimal("0.01"),
             min_vol=0.01,
         ),
     )
