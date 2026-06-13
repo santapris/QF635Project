@@ -59,6 +59,7 @@ Why VPIN_WIDE stays silent on testnet:
 
 from __future__ import annotations
 
+import math
 from decimal import Decimal
 
 from ...analytics.avellaneda_stoikov import AvellanedaStoikov
@@ -73,6 +74,9 @@ from ...core.types import OrderType, Quantity, Side, StrategyId, TimeInForce
 from ..base import AbstractStrategy
 from ..context import StrategyContext
 
+# Seconds in a 365-day year — matches EWMAVolatility's default annualization
+# so we can invert it back to per-second vol below.
+_SECONDS_PER_YEAR = 365 * 24 * 3600.0
 
 class AvellanedaStoikovStrategy(AbstractStrategy):
     """Adaptive market-making via Avellaneda-Stoikov optimal quoting."""
@@ -171,8 +175,18 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         if micro is None:
             return []
 
-        sigma_raw = self._vol.update(micro, ts_ns)
-        sigma = max(self._min_vol, sigma_raw) if sigma_raw is not None else self._min_vol
+        # EWMAVolatility returns *annualized relative* vol (dimensionless,
+        # e.g. 0.5 = 50%/yr). The A-S formula needs *absolute per-second*
+        # price vol so that gamma * sigma^2 * tau_seconds lands in price
+        # units. Convert: relative -> absolute by * micro; annual -> per-second
+        # by / sqrt(seconds_per_year). min_vol stays an annualized floor so
+        # its config meaning ("50% annual vol") is unchanged.
+        sigma_ann = (
+            max(self._min_vol, sigma_raw)
+            if (sigma_raw := self._vol.update(micro, ts_ns)) is not None
+            else self._min_vol
+        )
+        sigma = sigma_ann * micro / math.sqrt(_SECONDS_PER_YEAR)
 
         ofi_raw = self._ofi.update(bid, bid_size, ask, ask_size, ts_ns)
         ofi_val = ofi_raw or 0.0
@@ -216,39 +230,59 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         best_bid = event.bid_price
         best_ask = event.ask_price
 
-        legs: list[OrderLeg] = []
+        min_move = instrument.tick_size * self._min_price_move_ticks
+
+        # min_price_move_ticks caps amend churn, but it must not *drop* the leg:
+        # SignalEvent is a snapshot, so a missing side reads as "withdraw" and
+        # the OMS cancels the resting order (then re-places it next tick, losing
+        # queue position). Instead, when the new price hasn't moved far enough,
+        # re-emit the leg at the *last* price — the OMS sees an exact match and
+        # no-ops, preserving queue position. Hard guards (inventory cap,
+        # post-only) are the only conditions that legitimately withdraw a side.
+        bid_price = (
+            bid_price
+            if (self._last_bid is None or abs(bid_price - self._last_bid) >= min_move)
+            else self._last_bid
+        )
+        ask_price = (
+            ask_price
+            if (self._last_ask is None or abs(ask_price - self._last_ask) >= min_move)
+            else self._last_ask
+        )
+
+        # Re-run the post-only guard against the price actually being emitted:
+        # a held (last-tick) price can cross once the opposite best moves onto
+        # it, so guard the effective price, not the freshly computed one.
         buy_guard = post_only_guard(Side.BUY, bid_price, best_bid, best_ask)
         sell_guard = post_only_guard(Side.SELL, ask_price, best_bid, best_ask)
 
-        min_move = instrument.tick_size * self._min_price_move_ticks
-
-        bid_moved = (
-            self._last_bid is None
-            or abs(bid_price - self._last_bid) >= min_move
-        )
-        ask_moved = (
-            self._last_ask is None
-            or abs(ask_price - self._last_ask) >= min_move
-        )
-
+        legs: list[OrderLeg] = []
         bid_quote: float | None = None
         ask_quote: float | None = None
 
-        if inventory < float(self._max_position) and buy_guard and bid_moved:
+        if inventory < float(self._max_position) and buy_guard:
             legs.append(self._make_leg(Side.BUY, bid_price))
             self._last_bid = bid_price
             bid_quote = float(bid_price)
+        else:
+            # Side withdrawn by a hard guard: the OMS will cancel the resting
+            # bid, so forget its price — next time the side resumes it must
+            # place fresh (move-gate compares against None), not hold a dead one.
+            self._last_bid = None
 
-        if inventory > -float(self._max_position) and sell_guard and ask_moved:
+        if inventory > -float(self._max_position) and sell_guard:
             legs.append(self._make_leg(Side.SELL, ask_price))
             self._last_ask = ask_price
             ask_quote = float(ask_price)
+        else:
+            self._last_ask = None
 
         ctx.logger.debug(
             "as_tick",
             micro=round(micro, 4),
             arith_mid=round((bid + ask) / 2, 4),
-            sigma=round(sigma, 6),
+            sigma_ann=round(sigma_ann, 4),
+            sigma_abs=round(sigma, 8),
             ofi=round(ofi_val, 4),
             obi=round(obi_val or 0.0, 4),
             vpin=round(vpin_val, 4) if vpin_val is not None else None,

@@ -30,6 +30,7 @@ from trading.core import (
     TimeInForce,
 )
 from trading.core.events import (
+    AmendRejected,
     AmendRequest,
     CancelRequest,
     FillEvent,
@@ -324,6 +325,37 @@ async def test_amend_reject_leaves_order_resting() -> None:
     # Order is terminal (REJECTED); next reconcile will place fresh.
     assert order.status == OrderStatus.REJECTED
     assert order.is_terminal
+
+
+@pytest.mark.asyncio
+async def test_amend_reject_rolls_back_to_acknowledged() -> None:
+    """A transient amend reject rolls back to ACKNOWLEDGED (retry next tick).
+
+    Permanent rejects (e.g. Binance -5026) never arrive as AmendRejected — the
+    gateway translates those to OrderCancelled (see test_binance_order_gateway),
+    so the OMS only ever sees transient rejects here.
+    """
+    bus = _CaptureBus()
+    oms = OMSEngine(bus=bus, clock=LiveClock())
+    instr = _instrument()
+
+    order = _resting_order(instr, Side.BUY, "50000.00")
+    oms._orders[order.order_id] = order
+    order.transition_to(OrderStatus.PENDING_AMEND, at_ns=0)
+    order.pending_amend = (Price(Decimal("50001.00")), order.quantity)
+
+    reject = AmendRejected(
+        ts_event=1,
+        ts_ingest=1,
+        source="sim",
+        order_id=order.order_id,
+        client_order_id=order.client_order_id,
+        reason="amend failed: binance error -2011: order would immediately match",
+    )
+    await oms._handle_amend_rejected(reject)
+
+    assert order.status == OrderStatus.ACKNOWLEDGED
+    assert len(bus.of_type(CancelRequest)) == 0
 
 
 @pytest.mark.asyncio

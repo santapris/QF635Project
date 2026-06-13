@@ -197,6 +197,47 @@ async def test_serialize_restore_shape_preserved(strategy, inst, clock) -> None:
             assert l1.side == l2.side
 
 
+async def test_held_quote_reemits_both_legs_at_last_price(inst, clock) -> None:
+    """min_price_move_ticks must hold, not drop, a leg.
+
+    SignalEvent is a snapshot: a missing side reads as 'withdraw' and the OMS
+    cancels the resting order (losing queue position). When the new price is
+    within min_price_move_ticks of the last, the strategy must re-emit the leg
+    at the *previous* price so the OMS sees an exact match and no-ops.
+    """
+    strategy = AvellanedaStoikovStrategy(
+        strategy_id=StrategyId("as-test"),
+        instruments=[inst],
+        gamma=0.1, k=1.5, tau_seconds=300.0,
+        half_life_seconds=10.0, ofi_window_seconds=5.0,
+        quote_size=Decimal("0.00001"), max_position=Decimal("0.001"),
+        min_vol=0.01,
+        min_price_move_ticks=5,  # require a 0.05 move before re-pricing
+    )
+    ctx = _ctx(inst, clock)
+
+    # Tick 1: establishes resting quotes at some bid/ask.
+    sigs1 = await strategy.on_tick(_tick(inst, _T0), ctx)
+    legs1 = _legs(sigs1)
+    assert len(legs1) == 2
+    bid1 = next(leg.price for leg in legs1 if leg.side == Side.BUY)
+    ask1 = next(leg.price for leg in legs1 if leg.side == Side.SELL)
+
+    # Tick 2: nudge the book by 1 tick (0.01) — below the 5-tick gate.
+    sigs2 = await strategy.on_tick(
+        _tick(inst, _T0 + 1_000_000_000, bid="50000.01", ask="50001.01"), ctx
+    )
+    legs2 = _legs(sigs2)
+
+    # Both legs still present (no side dropped) and held at the prior prices.
+    sides2 = {leg.side for leg in legs2}
+    assert sides2 == {Side.BUY, Side.SELL}
+    bid2 = next(leg.price for leg in legs2 if leg.side == Side.BUY)
+    ask2 = next(leg.price for leg in legs2 if leg.side == Side.SELL)
+    assert bid2 == bid1
+    assert ask2 == ask1
+
+
 async def test_max_position_suppresses_buy_side(inst, clock) -> None:
     """At max long inventory, no BUY signal emitted."""
     strategy = AvellanedaStoikovStrategy(

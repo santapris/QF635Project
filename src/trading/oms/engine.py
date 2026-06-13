@@ -393,6 +393,11 @@ class OMSEngine:
             except InvalidStateTransitionError:
                 pass
             return
+        # Note: rejects that are *permanent for the order* (e.g. Binance -5026
+        # "modify limit exhausted") never reach here as an AmendRejected — the
+        # Binance gateway translates them to OrderCancelled so the OMS stays
+        # venue-neutral. Everything that arrives here is a transient reject: the
+        # order is still live at its old price, so roll back and retry next tick.
         _log.warning(
             "amend_rejected_rolling_back_to_acknowledged",
             order_id=str(event.order_id),

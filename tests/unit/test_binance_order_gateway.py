@@ -493,6 +493,112 @@ async def test_futures_amend_5027_noop_leaves_order_live(btc_binance):
     assert not [e for e in published if isinstance(e, OrderAmended)]
 
 
+async def test_futures_amend_5026_modify_limit_cancels_on_venue_then_publishes_cancel(btc_binance):
+    """Binance -5026 ('Exceed maximum modify order limit') means the order can
+    never be amended again, but it is STILL RESTING on the venue. The gateway
+    must actually DELETE it on the venue *before* publishing OrderCancelled —
+    otherwise the OMS drops it and re-places a fresh order while the original
+    keeps resting (and can still fill) on Binance, producing a 2-on-venue /
+    1-tracked desync. It must publish OrderCancelled (not AmendRejected) so the
+    OMS terminalizes and re-places, rather than looping the doomed amend."""
+    from trading.core.events import AmendRejected, OrderCancelled
+
+    rest = _FakeREST()
+    # First call: the PUT amend fails with -5026.
+    rest.responses.append(
+        OrderError(
+            "binance error -5026: Exceed maximum modify order limit.", code=-5026
+        )
+    )
+    # Second call: the DELETE we now issue to actually cancel the resting order.
+    rest.responses.append({"status": "CANCELED"})
+    bus, gw = _futures_gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    amend = AmendRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("test-amend-5026"),
+        instrument=btc_binance,
+        side=Side.BUY,
+        new_price=Price(Decimal("50000")),
+        new_quantity=Quantity(Decimal("0.10")),
+    )
+    await bus.publish(Topic.ORDERS, amend)
+
+    # The gateway must have actually issued a DELETE for this order.
+    delete_calls = [c for c in rest.calls if c[0] == "DELETE"]
+    assert len(delete_calls) == 1
+    assert delete_calls[0][2]["origClientOrderId"] == "test-amend-5026"
+
+    published = bus.published_on(Topic.ORDERS)
+    cancels = [e for e in published if isinstance(e, OrderCancelled)]
+    assert len(cancels) == 1
+    assert cancels[0].order_id == amend.order_id
+    # Must NOT publish an amend-reject — that is the path that loops.
+    assert not [e for e in published if isinstance(e, AmendRejected)]
+
+
+async def test_futures_amend_5026_delete_finds_order_already_gone(btc_binance):
+    """If the -5026 follow-up DELETE finds the order already gone (-2013), it is
+    not resting either way, so the gateway still publishes OrderCancelled and
+    does not roll the amend back."""
+    from trading.core.events import AmendRejected, OrderCancelled
+
+    rest = _FakeREST()
+    rest.responses.append(
+        OrderError("binance error -5026: Exceed maximum modify order limit.", code=-5026)
+    )
+    rest.responses.append(OrderError("Order does not exist.", code=-2013))
+    bus, gw = _futures_gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    amend = AmendRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("test-amend-5026-gone"),
+        instrument=btc_binance,
+        side=Side.BUY,
+        new_price=Price(Decimal("50000")),
+        new_quantity=Quantity(Decimal("0.10")),
+    )
+    await bus.publish(Topic.ORDERS, amend)
+
+    published = bus.published_on(Topic.ORDERS)
+    assert len([e for e in published if isinstance(e, OrderCancelled)]) == 1
+    assert not [e for e in published if isinstance(e, AmendRejected)]
+
+
+async def test_futures_amend_5026_delete_fails_rolls_back_no_leak(btc_binance):
+    """If the -5026 follow-up DELETE fails for a non-'gone' reason, the order is
+    genuinely still live. The gateway must NOT publish OrderCancelled (which would
+    make the OMS drop a still-resting order = leak); it rolls the amend back via
+    AmendRejected so the reconciler retries the cancel next tick."""
+    from trading.core.events import AmendRejected, OrderCancelled
+
+    rest = _FakeREST()
+    rest.responses.append(
+        OrderError("binance error -5026: Exceed maximum modify order limit.", code=-5026)
+    )
+    # DELETE fails with some other order error — order is still resting.
+    rest.responses.append(OrderError("Some other error.", code=-1234))
+    bus, gw = _futures_gw_with_fake(rest, [btc_binance])
+    await gw.start()
+    amend = AmendRequest(
+        ts_event=0, ts_ingest=0, source="oms",
+        order_id=OrderId(uuid4()),
+        client_order_id=ClientOrderId("test-amend-5026-stuck"),
+        instrument=btc_binance,
+        side=Side.BUY,
+        new_price=Price(Decimal("50000")),
+        new_quantity=Quantity(Decimal("0.10")),
+    )
+    await bus.publish(Topic.ORDERS, amend)
+
+    published = bus.published_on(Topic.ORDERS)
+    # No cancel — the order is still resting, dropping it would leak it.
+    assert not [e for e in published if isinstance(e, OrderCancelled)]
+    assert len([e for e in published if isinstance(e, AmendRejected)]) == 1
+
+
 async def test_order_gateway_format_decimal_no_exponent(btc_binance):
     """Verify quantities like 0.00001 don't get serialized as 1E-5."""
     rest = _FakeREST()

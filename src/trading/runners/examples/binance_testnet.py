@@ -111,7 +111,7 @@ async def _amain() -> int:
             instruments=instruments,
             gamma=0.3,
             k=1.5,
-            tau_seconds=300.0,
+            tau_seconds=2.0,
             half_life_seconds=60.0,
             ofi_window_seconds=10.0,
             ofi_alpha=0.001,
@@ -121,7 +121,11 @@ async def _amain() -> int:
             quote_size=Decimal("0.002"),
             max_position=Decimal("0.01"),
             min_vol=0.5,             # 50% floor — BTC annual vol, stops sub-fee spreads
-            min_price_move_ticks=2,  # only re-quote when price moves ≥2 ticks
+            min_price_move_ticks=10,  # only re-quote on a ≥10-tick (~1 USD)
+                                      # move. Caps amend rate so a single resting
+                                      # order stays under Binance's per-order
+                                      # modify limit (-5026); also lengthens
+                                      # queue position. ~20% of the half-spread.
         ),
     )
 

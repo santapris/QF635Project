@@ -60,6 +60,7 @@ from ...core.types import (
 from ...event_bus.base import AbstractEventBus, Topic
 from ..base import AbstractOrderGateway
 from .config import BinanceConfig, BinanceCredentials
+from .errors import E_AMEND_MODIFY_LIMIT, E_AMEND_NOOP
 from .order_translation import (
     order_type_to_binance,
     side_to_binance,
@@ -327,7 +328,7 @@ class BinanceOrderGateway(AbstractOrderGateway):
         except OrderError as exc:
             code = exc.context.get("code")
             # -5027: already at requested price/qty — no-op, order still lives.
-            if code == -5027:
+            if code == E_AMEND_NOOP:
                 _log.debug(
                     "binance_futures_amend_noop",
                     order_id=req.order_id, reason=exc.message,
@@ -351,6 +352,27 @@ class BinanceOrderGateway(AbstractOrderGateway):
                         client_order_id=req.client_order_id,
                         reason=f"amend revealed order gone: {exc.message}",
                     ),
+                )
+                return
+            # -5026: order hit its per-order modify cap. The order is STILL
+            # RESTING on the venue, but no future amend on it will ever succeed —
+            # rolling back to ACKNOWLEDGED would make the OMS retry the same
+            # doomed amend forever (observed: ~290 rejects on one order in
+            # 10 min). Unlike -2013, the order is NOT gone, so we must actually
+            # cancel it on the venue before terminalizing the OMS's view.
+            # Emitting OrderCancelled without a real DELETE leaks the order:
+            # the OMS drops it and re-places a fresh one, but the original keeps
+            # resting (and can still fill) on Binance — the exact 2-on-venue /
+            # 1-tracked desync this path used to cause. After the DELETE lands,
+            # the next reconcile places a fresh order with a fresh modify budget.
+            # The OMS stays venue-neutral (it never sees the Binance code).
+            if code == E_AMEND_MODIFY_LIMIT:
+                _log.info(
+                    "binance_futures_amend_modify_limit_cancelling",
+                    order_id=req.order_id, reason=exc.message,
+                )
+                await self._cancel_then_terminalize(
+                    req, why=f"amend modify-limit exhausted: {exc.message}"
                 )
                 return
             # All other errors: the amend was rejected but the order is still
@@ -429,6 +451,58 @@ class BinanceOrderGateway(AbstractOrderGateway):
                 new_price=applied_price,
                 new_quantity=applied_qty,
                 new_exchange_order_id=new_exchange_id,
+            ),
+        )
+
+    async def _cancel_then_terminalize(self, req: AmendRequest, *, why: str) -> None:
+        """DELETE a still-resting order on the venue, then emit OrderCancelled.
+
+        Used when an amend reveals the order can no longer be amended but is
+        still live (e.g. -5026 modify-limit exhausted). We must remove it from
+        the venue before terminalizing the OMS's view — otherwise the OMS drops
+        it and re-places a fresh order while the original keeps resting (and can
+        still fill) on Binance. A DELETE that finds the order already gone
+        (-2011/-2013) is success for our purposes: either way it is not resting,
+        so we emit OrderCancelled. A DELETE that fails for any other reason
+        leaves the order genuinely live, so we roll the amend back to
+        ACKNOWLEDGED and let the reconciler retry rather than leak it.
+        """
+        wire_symbol = self._symbols.wire_symbol(req.instrument)
+        try:
+            await self._rest.request(
+                "DELETE", self._config.api_prefix + "/order",
+                params={"symbol": wire_symbol, "origClientOrderId": req.client_order_id},
+                signed=True, weight=_W_CANCEL_ORDER,
+            )
+        except OrderError as exc:
+            code = exc.context.get("code")
+            if code not in (-2011, -2013):
+                _log.warning(
+                    "binance_futures_modify_limit_cancel_failed_rolling_back",
+                    order_id=req.order_id, reason=exc.message,
+                )
+                await self._publish_amend_reject(req, f"modify-limit cancel failed: {exc.message}")
+                return
+            _log.info(
+                "binance_futures_modify_limit_cancel_order_already_gone",
+                order_id=req.order_id, reason=exc.message,
+            )
+        except OrderGatewayError as exc:
+            _log.exception(
+                "binance_futures_modify_limit_cancel_transport_error",
+                order_id=req.order_id,
+            )
+            await self._publish_amend_reject(req, f"modify-limit cancel transport error: {exc}")
+            return
+        await self._safe_publish(
+            Topic.ORDERS,
+            OrderCancelled(
+                ts_event=self._clock.now_ns(),
+                ts_ingest=self._clock.now_ns(),
+                source=self.venue,
+                order_id=req.order_id,
+                client_order_id=req.client_order_id,
+                reason=why,
             ),
         )
 

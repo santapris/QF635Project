@@ -49,6 +49,11 @@ _E_INSUFFICIENT_BALANCE = -2010
 _E_ORDER_WOULD_TRIGGER_IMMEDIATELY = -2021  # STOP_LOSS-type
 _E_MIN_NOTIONAL = -1013  # also used here in some cases
 
+# Amend-specific outcomes (handled inline in order_gateway, not via translate_error)
+E_AMEND_NOOP = -5027            # already at requested price/qty — order unchanged
+E_AMEND_MODIFY_LIMIT = -5026    # order hit its per-order modify cap; no further
+                                # amends will ever succeed — cancel and re-place
+
 # Rate limits
 _E_TOO_MANY_REQUESTS = -1003  # rare; usually Binance returns 429/418 HTTP
 
@@ -140,4 +145,9 @@ def translate_error(err: BinanceErrorResponse, *, retry_after: float | None = No
     )
 
 
-__all__ = ["BinanceErrorResponse", "translate_error"]
+__all__ = [
+    "BinanceErrorResponse",
+    "E_AMEND_MODIFY_LIMIT",
+    "E_AMEND_NOOP",
+    "translate_error",
+]
