@@ -96,8 +96,8 @@ async def _amain() -> int:
     risk.register_rules(_STRATEGY_ID, [
         # Change based on whether there's stale open orders on testnet
         # TODO: might need to build a cancel and replace order update flow to avoid this guard rejecting everything after the first few ticks
-        MaxPositionRule(max_long=Decimal("0.01"), max_short=Decimal("0.01")),
-        MaxOrderSizeRule(max_quantity=Decimal("0.002")),
+        MaxPositionRule(max_long=Decimal("0.02"), max_short=Decimal("0.02")),
+        MaxOrderSizeRule(max_quantity=Decimal("0.01")),
         DailyLossLimitRule(max_loss=Decimal("50")),
     ])
     oms = OMSEngine(bus=bus, clock=clock)
@@ -118,8 +118,8 @@ async def _amain() -> int:
             vpin_bucket_volume=0.001,
             vpin_threshold=0.7,
             vpin_widen_factor=3.0,
-            quote_size=Decimal("0.002"),
-            max_position=Decimal("0.01"),
+            quote_size=Decimal("0.01"),
+            max_position=Decimal("0.02"),
             min_vol=0.5,             # 50% floor — BTC annual vol, stops sub-fee spreads
             min_price_move_ticks=10,  # only re-quote on a ≥10-tick (~1 USD)
                                       # move. Caps amend rate so a single resting

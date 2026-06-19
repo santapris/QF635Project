@@ -270,3 +270,125 @@ async def test_max_position_suppresses_buy_side(inst, clock) -> None:
     if signals:
         sides = {leg.side for leg in signals[0].legs}
         assert Side.BUY not in sides
+
+
+# --- Retune regression: spread magnitude and inventory skew direction -------
+#
+# After the vol-unit fix (annualized-relative -> absolute-per-second), the
+# defaults gamma=0.2 / tau_seconds=2.0 are tuned so that at the min_vol floor
+# the half-spread is ~1.5 bps of price. These tests lock that in: a future
+# change to the conversion or the defaults that breaks the magnitude or the
+# skew sign will fail here rather than silently mis-quote in production.
+
+
+def _retune_strategy(inst, *, max_position="0.5") -> AvellanedaStoikovStrategy:
+    """Strategy at the *shipped* defaults (gamma=0.2, tau=2.0, min_vol=0.5)."""
+    return AvellanedaStoikovStrategy(
+        strategy_id=StrategyId("as-test"),
+        instruments=[inst],
+        gamma=0.2,
+        k=1.5,
+        tau_seconds=2.0,
+        half_life_seconds=10.0,
+        ofi_window_seconds=5.0,
+        quote_size=Decimal("0.00001"),
+        max_position=Decimal(max_position),
+        min_vol=0.5,
+        min_price_move_ticks=1,
+    )
+
+
+async def test_half_spread_about_1p5_bps_at_floor(inst, clock) -> None:
+    """At the min_vol floor and flat inventory, half-spread ≈ 1.5 bps of mid.
+
+    First tick: vol is None -> min_vol floor applies, and microprice == mid for
+    a balanced book, so reservation == mid. The quoted bid/ask are therefore
+    symmetric around mid and half_spread = (ask - bid) / 2.
+    """
+    strategy = _retune_strategy(inst)
+    ctx = _ctx(inst, clock)
+    # Balanced book centred on 100000 -> micro == mid == 100000.50.
+    tick = _tick(
+        inst, _T0,
+        bid="100000.00", bid_size="1.0",
+        ask="100001.00", ask_size="1.0",
+    )
+    signals = await strategy.on_tick(tick, ctx)
+    legs = _legs(signals)
+    bid = next(leg.price for leg in legs if leg.side == Side.BUY)
+    ask = next(leg.price for leg in legs if leg.side == Side.SELL)
+
+    mid = (Decimal("100000.00") + Decimal("100001.00")) / 2
+    half_spread_bps = float((ask - bid) / 2 / mid) * 1e4
+    # Target 1.5 bps; allow a band that excludes the old (~3571$ ≈ 357 bps)
+    # broken regime and the additive k-term jitter.
+    assert 1.0 < half_spread_bps < 2.5, f"half_spread={half_spread_bps:.3f} bps"
+
+
+async def test_reservation_skews_down_when_long(inst, clock) -> None:
+    """Long inventory pushes the reservation (and both quotes) below mid.
+
+    A-S: reservation = mid - inv * gamma * sigma^2 * tau. With inv > 0 the
+    whole quote pair shifts down so the ask rests closer to mid (eager to
+    sell) and the bid pulls back (reluctant to buy more).
+    """
+    mid = Decimal("100000.50")
+
+    # Flat baseline.
+    flat = _retune_strategy(inst)
+    flat_legs = _legs(await flat.on_tick(
+        _tick(inst, _T0, bid="100000.00", ask="100001.00"),
+        _ctx(inst, clock),
+    ))
+    flat_bid = next(leg.price for leg in flat_legs if leg.side == Side.BUY)
+    flat_ask = next(leg.price for leg in flat_legs if leg.side == Side.SELL)
+
+    # Long position.
+    long_strat = _retune_strategy(inst)
+    portfolio = StaticPortfolioView()
+    portfolio.set_position(Position(
+        strategy_id=StrategyId("as-test"),
+        instrument=inst,
+        quantity=Decimal("0.25"),  # half of max_position
+        average_entry_price=mid,
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+    ))
+    long_legs = _legs(await long_strat.on_tick(
+        _tick(inst, _T0, bid="100000.00", ask="100001.00"),
+        _ctx(inst, clock, portfolio),
+    ))
+    long_bid = next(leg.price for leg in long_legs if leg.side == Side.BUY)
+    long_ask = next(leg.price for leg in long_legs if leg.side == Side.SELL)
+
+    # Both quotes shifted down relative to flat.
+    assert long_bid < flat_bid
+    assert long_ask < flat_ask
+
+
+async def test_reservation_skews_up_when_short(inst, clock) -> None:
+    """Short inventory (inv < 0) shifts the quote pair above the flat baseline."""
+    flat = _retune_strategy(inst)
+    flat_legs = _legs(await flat.on_tick(
+        _tick(inst, _T0, bid="100000.00", ask="100001.00"),
+        _ctx(inst, clock),
+    ))
+    flat_ask = next(leg.price for leg in flat_legs if leg.side == Side.SELL)
+
+    short_strat = _retune_strategy(inst)
+    portfolio = StaticPortfolioView()
+    portfolio.set_position(Position(
+        strategy_id=StrategyId("as-test"),
+        instrument=inst,
+        quantity=Decimal("-0.25"),
+        average_entry_price=Decimal("100000.50"),
+        realized_pnl=Decimal("0"),
+        unrealized_pnl=Decimal("0"),
+    ))
+    short_legs = _legs(await short_strat.on_tick(
+        _tick(inst, _T0, bid="100000.00", ask="100001.00"),
+        _ctx(inst, clock, portfolio),
+    ))
+    short_ask = next(leg.price for leg in short_legs if leg.side == Side.SELL)
+
+    assert short_ask > flat_ask

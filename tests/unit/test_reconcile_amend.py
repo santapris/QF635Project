@@ -26,6 +26,7 @@ from trading.core import (
     OrderType,
     Side,
     SignalEvent,
+    SimulatedClock,
     StrategyId,
     TimeInForce,
 )
@@ -419,3 +420,134 @@ async def test_pending_cancel_order_not_duplicated() -> None:
     assert bus.of_type(AmendRequest) == []
     # And the PENDING_CANCEL order itself should not be cancelled again.
     assert bus.of_type(CancelRequest) == []
+
+
+# ---------------------------------------------------------------------------
+# Stale PENDING_AMEND sweep — recovers orders wedged by a lost amend response.
+#
+# Regression for the observed desync: an amend that races a fill loses its
+# OrderAmended response, stranding the order in PENDING_AMEND forever (the
+# reconciler waits for a confirm that never comes and refuses to cancel a
+# mid-amend order). The sweep times the amend out and rolls it back.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_stale_pending_amend_rolls_back_to_acknowledged() -> None:
+    """A PENDING_AMEND order older than the timeout rolls back to ACKNOWLEDGED."""
+    clock = SimulatedClock(start=0)
+    bus = _CaptureBus()
+    oms = OMSEngine(bus=bus, clock=clock, pending_amend_timeout_seconds=5.0)
+    instr = _instrument()
+
+    order = _resting_order(instr, Side.BUY, "50000.00", qty="0.1")
+    oms._orders[order.order_id] = order
+    order.transition_to(OrderStatus.PENDING_AMEND, at_ns=clock.now_ns())
+    order.pending_amend = (Price(Decimal("50001.00")), order.quantity)
+
+    # Just under the timeout: still waiting, untouched.
+    clock.advance(4 * 1_000_000_000)
+    await oms._sweep_stale_pending_amends()
+    assert order.status == OrderStatus.PENDING_AMEND
+
+    # Past the timeout: rolled back so the next reconcile can re-amend/cancel.
+    clock.advance(2 * 1_000_000_000)  # now 6s since the amend
+    await oms._sweep_stale_pending_amends()
+    assert order.status == OrderStatus.ACKNOWLEDGED
+    assert order.pending_amend is None
+    # Rollback is local-only — no venue traffic emitted by the sweep itself.
+    assert bus.of_type(AmendRequest) == []
+    assert bus.of_type(CancelRequest) == []
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_amend_fully_filled_terminalizes() -> None:
+    """If fills consumed all leaves while the amend was lost, the sweep marks
+    the order FILLED rather than reviving it as ACKNOWLEDGED with leaves=0
+    (which would make the reconciler loop amending it forever)."""
+    clock = SimulatedClock(start=0)
+    bus = _CaptureBus()
+    oms = OMSEngine(bus=bus, clock=clock, pending_amend_timeout_seconds=5.0)
+    instr = _instrument()
+
+    order = _resting_order(instr, Side.BUY, "50000.00", qty="0.1")
+    oms._orders[order.order_id] = order
+    order.transition_to(OrderStatus.PENDING_AMEND, at_ns=clock.now_ns())
+    order.pending_amend = (Price(Decimal("50001.00")), order.quantity)
+
+    # A fill consumed the full quantity while the amend was in-flight.
+    fill = FillEvent(
+        ts_event=1, ts_ingest=1, source="sim",
+        fill_id=FillId(uuid4()),
+        order_id=order.order_id, client_order_id=order.client_order_id,
+        exchange_order_id=None, instrument=instr, strategy_id=order.strategy_id,
+        side=Side.BUY,
+        fill_price=Price(Decimal("50000.00")),
+        fill_quantity=Quantity(Decimal("0.1")),
+        cumulative_quantity=Quantity(Decimal("0.1")),
+        leaves_quantity=Quantity(Decimal("0")),
+    )
+    order.record_fill(fill)  # accounting only — leaves status PENDING_AMEND
+    assert order.leaves_quantity == 0
+
+    clock.advance(6 * 1_000_000_000)
+    await oms._sweep_stale_pending_amends()
+
+    assert order.status == OrderStatus.FILLED
+    assert order.pending_amend is None
+
+
+@pytest.mark.asyncio
+async def test_sweep_ignores_fresh_and_non_pending_orders() -> None:
+    """The sweep only touches PENDING_AMEND orders past the timeout — a fresh
+    amend and an ordinary resting order are both left alone."""
+    clock = SimulatedClock(start=0)
+    bus = _CaptureBus()
+    oms = OMSEngine(bus=bus, clock=clock, pending_amend_timeout_seconds=5.0)
+    instr = _instrument()
+
+    resting = _resting_order(instr, Side.SELL, "50100.00")  # ACKNOWLEDGED
+    oms._orders[resting.order_id] = resting
+
+    fresh = _resting_order(instr, Side.BUY, "50000.00")
+    oms._orders[fresh.order_id] = fresh
+
+    # Advance, THEN start the fresh amend so it's well within the timeout.
+    clock.advance(10 * 1_000_000_000)
+    fresh.transition_to(OrderStatus.PENDING_AMEND, at_ns=clock.now_ns())
+    fresh.pending_amend = (Price(Decimal("50001.00")), fresh.quantity)
+
+    await oms._sweep_stale_pending_amends()
+
+    assert fresh.status == OrderStatus.PENDING_AMEND   # too recent
+    assert resting.status == OrderStatus.ACKNOWLEDGED  # not amending
+
+
+@pytest.mark.asyncio
+async def test_late_amend_response_after_rollback_is_safe() -> None:
+    """A genuinely-late OrderAmended arriving after the sweep rolled the order
+    back must not crash or revive stale state — _handle_amend swallows the now
+    illegal ACKNOWLEDGED->ACKNOWLEDGED transition."""
+    clock = SimulatedClock(start=0)
+    bus = _CaptureBus()
+    oms = OMSEngine(bus=bus, clock=clock, pending_amend_timeout_seconds=5.0)
+    instr = _instrument()
+
+    order = _resting_order(instr, Side.BUY, "50000.00")
+    oms._orders[order.order_id] = order
+    order.transition_to(OrderStatus.PENDING_AMEND, at_ns=clock.now_ns())
+    order.pending_amend = (Price(Decimal("50001.00")), order.quantity)
+
+    clock.advance(6 * 1_000_000_000)
+    await oms._sweep_stale_pending_amends()
+    assert order.status == OrderStatus.ACKNOWLEDGED
+
+    # The lost amend's response finally lands.
+    late = OrderAmended(
+        ts_event=clock.now_ns(), ts_ingest=clock.now_ns(), source="sim",
+        order_id=order.order_id, client_order_id=order.client_order_id,
+        new_price=Price(Decimal("50001.00")),
+    )
+    await oms._handle_amend(late)  # must not raise
+
+    assert order.status == OrderStatus.ACKNOWLEDGED
+    assert order.pending_amend is None

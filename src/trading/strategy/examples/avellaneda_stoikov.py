@@ -12,9 +12,9 @@ Quote logic per tick:
 6. Post-only guard before emitting: reject if quote would cross.
 
 Parameters (all from TOML config as str → parsed in __init__):
-    gamma               : A-S risk aversion (default 0.3)
+    gamma               : A-S risk aversion (default 0.2)
     k                   : order arrival intensity (default 1.5)
-    tau_seconds         : quoting horizon in seconds (default 300)
+    tau_seconds         : quoting horizon in seconds (default 2.0)
     half_life_seconds   : EWMA vol half-life (default 60)
     ofi_window_seconds  : OFI rolling window (default 10)
     ofi_alpha           : OFI tilt coefficient on reservation (default 0)
@@ -29,6 +29,21 @@ Parameters (all from TOML config as str → parsed in __init__):
                           cancel-replace via amend, re-quoting on every
                           sub-tick drift floods the venue rate limit and
                           widens the amend-vs-fill race window
+
+Tuning the spread/skew (why the defaults are what they are)
+-----------------------------------------------------------
+EWMAVolatility reports *annualized relative* vol; on_tick converts it to
+*absolute per-second* vol (× micro / √seconds_per_year) before the A-S
+formula, so γσ²τ lands in price units. With sigma at the min_vol floor:
+
+    half_spread ≈ (γ · min_vol² · P² · τ / T_yr) / 2      (+ a tiny additive
+    skew_at_qmax = γ · min_vol² · P² · τ / T_yr · max_pos    k-term, ~0.3 bps)
+
+Two design constraints fix the defaults (P = 100k reference, T_yr = 3.15e7):
+  - skew ≈ half_spread at full inventory  ⟹  max_position ≈ 0.5
+  - half_spread ≈ 1.5 bps of price        ⟹  γ · τ ≈ 0.378  (→ γ=0.2, τ=2.0)
+The half_spread is ~price-independent in bps but grows mildly with P. If you
+move to a very different price level or symbol, re-solve γ·τ for that P.
 
 VPIN toxicity gate — what it is and when it fires
 --------------------------------------------------
@@ -86,9 +101,9 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         *,
         strategy_id: StrategyId,
         instruments: list[Instrument],
-        gamma: float = 0.3,
+        gamma: float = 0.2,
         k: float = 1.5,
-        tau_seconds: float = 300.0,
+        tau_seconds: float = 2.0,
         half_life_seconds: float = 60.0,
         ofi_window_seconds: float = 10.0,
         ofi_alpha: float = 0.0,
@@ -143,9 +158,9 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
         return cls(
             strategy_id=strategy_id,
             instruments=instruments,
-            gamma=f("gamma", 0.3),
+            gamma=f("gamma", 0.2),
             k=f("k", 1.5),
-            tau_seconds=f("tau_seconds", 300.0),
+            tau_seconds=f("tau_seconds", 2.0),
             half_life_seconds=f("half_life_seconds", 60.0),
             ofi_window_seconds=f("ofi_window_seconds", 10.0),
             ofi_alpha=f("ofi_alpha", 0.0),

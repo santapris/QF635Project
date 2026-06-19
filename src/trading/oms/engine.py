@@ -122,6 +122,7 @@ class OMSEngine:
         source: str = "oms",
         signal_ttl_seconds: float = 300.0,
         algo_driver_interval_seconds: float = 0.1,
+        pending_amend_timeout_seconds: float = 5.0,
     ) -> None:
         self._bus = bus
         self._clock = clock
@@ -132,6 +133,19 @@ class OMSEngine:
         # the right cadence depends on the strategy's execution horizon — a
         # fast scalper TWAP wants tighter ticks than a slow VWAP unwind.
         self._algo_driver_interval = algo_driver_interval_seconds
+        # An in-flight amend/cancel normally confirms in <100ms. If the venue's
+        # response is lost (observed: an amend racing a fill, where the
+        # OrderAmended never lands), the order would sit in PENDING_AMEND
+        # forever — the reconciler waits for a confirm that never comes and
+        # refuses to cancel a mid-amend order. The sweep below treats any
+        # in-flight transition older than this as lost and rolls it back so the
+        # next reconcile re-amends or cancels it.
+        self._pending_amend_timeout_ns = int(
+            pending_amend_timeout_seconds * _NS_PER_SECOND
+        )
+        # Throttle the sweep: the driver wakes every ~0.1s, but checking order
+        # ages every second is ample given a multi-second timeout.
+        self._last_amend_sweep_ns: int = 0
 
         # Signal cache: event_id -> (signal, received_ns).
         # Insertion-ordered dict gives us cheap LRU-style eviction.
@@ -449,6 +463,62 @@ class OMSEngine:
         if event.new_exchange_order_id is not None:
             order.exchange_order_id = event.new_exchange_order_id
 
+    async def _sweep_stale_pending_amends(self) -> None:
+        """Recover orders wedged in PENDING_AMEND by a lost venue response.
+
+        An amend normally confirms in <100ms. When the OrderAmended /
+        AmendRejected / OrderCancelled response is lost (e.g. an amend that
+        raced a fill), the order is stranded in PENDING_AMEND: the reconciler
+        skips it waiting for a confirm that never arrives, and deliberately
+        won't cancel a mid-amend order. The order stays alive on the venue but
+        frozen in the OMS — a permanent desync.
+
+        After ``pending_amend_timeout`` we treat the amend as lost and roll the
+        order back to ACKNOWLEDGED (or FILLED if fills consumed all leaves
+        meanwhile), exactly as :meth:`_handle_amend_rejected` does for an
+        explicit reject. The next reconcile tick then re-amends or cancels it.
+        Rolling back is the conservative choice: it makes no assumption about
+        whether the amend applied, only that the OMS must stop waiting.
+
+        A genuinely-late amend response arriving after rollback is safe —
+        :meth:`_handle_amend` catches the now-illegal ACKNOWLEDGED->ACKNOWLEDGED
+        transition and clears ``pending_amend``.
+        """
+        now = self._clock.now_ns()
+        # Throttle: at most once per second (timeout is multi-second).
+        if now - self._last_amend_sweep_ns < _NS_PER_SECOND:
+            return
+        self._last_amend_sweep_ns = now
+
+        for order in self._orders.values():
+            if order.status is not OrderStatus.PENDING_AMEND:
+                continue
+            if now - order.last_update_ns < self._pending_amend_timeout_ns:
+                continue
+
+            age_s = (now - order.last_update_ns) / _NS_PER_SECOND
+            order.pending_amend = None
+            # Leaves fully consumed while the amend was in-flight: terminalize
+            # rather than reviving as ACKNOWLEDGED with leaves=0, which would
+            # make the reconciler loop amending it forever.
+            target = (
+                OrderStatus.FILLED
+                if order.leaves_quantity == 0
+                else OrderStatus.ACKNOWLEDGED
+            )
+            try:
+                order.transition_to(target, at_ns=now)
+            except InvalidStateTransitionError:
+                # Raced a real response between the age check and here.
+                continue
+            _log.warning(
+                "pending_amend_timed_out_rolling_back",
+                order_id=str(order.order_id),
+                client_order_id=str(order.client_order_id),
+                rolled_back_to=target.value,
+                age_seconds=round(age_s, 2),
+            )
+
     # --- Quote reconciliation and placement ------------------------------
 
     async def _reconcile_quotes(self, signal: SignalEvent) -> None:
@@ -625,6 +695,7 @@ class OMSEngine:
                 await asyncio.sleep(self._algo_driver_interval)
                 for leg_id in list(self._algos):
                     await self._drive_algo(leg_id)
+                await self._sweep_stale_pending_amends()
         except asyncio.CancelledError:
             return
 
