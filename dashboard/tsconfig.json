@@ -15,7 +15,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["react", "react_dom"]
+    "types": ["react", "react-dom"]
   },
   "include": ["src"]
 }

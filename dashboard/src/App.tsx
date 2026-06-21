@@ -15,7 +15,7 @@ import AnalyticsPage from "./pages/AnalyticsPage";
 import { buildTheme, getInitialMode, THEME_STORAGE_KEY, type ThemeMode } from "./theme/theme";
 import { ThemeModeContext } from "./theme/ThemeModeContext";
 
-const TOOLBAR_HEIGHT = 48; // dense AppBar
+const TOOLBAR_HEIGHT = 51; // dense AppBar (48) + 3px M-stripe
 
 function AppInner() {
   const [state, dispatch] = useReducer(pipelineReducer, initialState);
