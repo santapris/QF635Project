@@ -221,11 +221,13 @@ class RiskEngine:
                 ))
                 continue
 
-            # Apply tightest clamp for this leg.
+            # Apply tightest clamp for this leg, collect reason from binding rule
             qty = leg.quantity
+            clamp_reason = ""
             for r in results:
                 if r.approved_quantity is not None and r.approved_quantity < qty:
                     qty = Quantity(r.approved_quantity)
+                    clamp_reason = r.reason # reason from the tightest clamping rule
 
             # Min-notional backstop. A clamp (e.g. MaxPosition trimming a buy to
             # fit remaining headroom) can drive the final size below the venue's
@@ -265,6 +267,7 @@ class RiskEngine:
 
             approved.append(ApprovedLeg(
                 leg_id=leg.leg_id, side=leg.side, approved_quantity=qty,
+                clamp_reason=clamp_reason,
             ))
 
         # Verdict assembly.

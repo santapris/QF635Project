@@ -102,7 +102,16 @@ function parseMessage(raw: string): PipelineAction | null {
         },
       };
 
-    case "risk-decisions":
+    case "risk-decisions": {
+      // for approved but clamped legs, rule_name and reason live inside the leg object `approved_legs[n].clamp_reason`, not the top-level event.
+      const approvedLegs = (data.approved_legs ?? []) as Array<Record<string, unknown>>; 
+      const clampedLegs = approvedLegs.filter(l => l.clamp_reason);
+      const clampRuleNames = [...new Set(
+        clampedLegs.map(l => String(l.rule_name ?? "")).filter(Boolean)
+      )];
+      const clampReasons = clampedLegs.map(l => 
+        `${l.side} ${String(l.clamp_reason)}`
+      )
       return {
         type: "RISK",
         payload: {
@@ -110,12 +119,19 @@ function parseMessage(raw: string): PipelineAction | null {
           ts,
           strategy_id: String(data.strategy_id ?? ""),
           approved: Boolean(data.approved),
-          rule_name: data.rule_name ? String(data.rule_name) : null,
-          reason: String(data.reason ?? ""),
-          approved_quantity: data.approved_quantity ? String(data.approved_quantity) : null,
+          rule_name: data.rule_name 
+          ? String(data.rule_name) 
+          : clampRuleNames.length ? clampRuleNames.join(", ") : null,
+          reason: data.reason
+          ? String(data.reason)
+          : clampReasons.join("; "),
+          approved_quantity: approvedLegs.length
+          ? approvedLegs.map(l => `${l.side} ${l.approved_quantity}`).join(", ")
+          :null,
         },
       };
-
+    }
+    
     case "orders": {
       // ExecutionRoutedEvent rides the orders topic but is a routing-decision
       // audit record, not an order lifecycle event — route it to its own row.

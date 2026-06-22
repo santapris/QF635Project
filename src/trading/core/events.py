@@ -248,6 +248,8 @@ class ApprovedLeg(BaseModel):
     side: Side
     approved_quantity: Quantity
     """Quantity approved by risk — may be less than requested if clamped."""
+    clamp_reason: str = ""
+    """Non empty when approved_quantity < requested quantity; names the rule and describes the reduction"""
 
 
 class RejectedLeg(BaseModel):

@@ -40,12 +40,13 @@ class RuleResult:
     """
 
     @classmethod
-    def approve(cls, rule_name: str, *, clamp_to: Quantity | None = None) -> "RuleResult":
+    def approve(cls, rule_name: str, *, clamp_to: Quantity | None = None, reason: str = "") -> "RuleResult":
         return cls(
             rule_name=rule_name,
             approved=True,
             severity=Severity.INFO,
             approved_quantity=clamp_to,
+            reason=reason,
         )
 
     @classmethod

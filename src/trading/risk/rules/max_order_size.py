@@ -32,7 +32,14 @@ class MaxOrderSizeRule(AbstractRiskRule):
     def evaluate(self, signal: SignalEvent, leg: OrderLeg, state: RiskState) -> RuleResult:
         if leg.quantity <= self._max_quantity:
             return RuleResult.approve(self.name)
-        return RuleResult.approve(self.name, clamp_to=self._max_quantity)
+        return RuleResult.approve(
+            self.name, 
+            clamp_to=self._max_quantity,
+            reason=(
+                f"clamped {leg.quantity} => {self._max_quantity} "
+                f"(max_order_size limit)"
+            ),
+        )
 
 
 __all__ = ["MaxOrderSizeRule"]

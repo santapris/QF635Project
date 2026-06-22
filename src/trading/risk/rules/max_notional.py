@@ -54,7 +54,14 @@ class MaxNotionalRule(AbstractRiskRule):
                     f"and clamped quantity would be zero"
                 ),
             )
-        return RuleResult.approve(self.name, clamp_to=clamped_qty)
+        return RuleResult.approve(
+            self.name, 
+            clamp_to=clamped_qty, 
+            reason=(
+                f"clamped {leg.quantity} -> {clamped_qty:.6g} "
+                f"(notional {notional:.2f} > cap {self._max_notional})"
+            ),
+            )
 
 
 __all__ = ["MaxNotionalRule"]
