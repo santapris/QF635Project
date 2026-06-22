@@ -19,7 +19,7 @@ from trading.risk.base import AbstractRiskRule, RuleResult
 from ..state import RiskState
 
 
-class VPINCircuitBreaker(AbstractRiskRule):
+class VPINCircuitBreakerRule(AbstractRiskRule):
     """VPINCircuitBreaker: halt quoting when order flow toxicity is sustained. 
     
     Parameters

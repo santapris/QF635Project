@@ -113,7 +113,7 @@ def register() -> None:
     rule_registry.register("throttle", _ThrottlePlugin())
     rule_registry.register("daily_loss_limit", _DailyLossLimitPlugin())
     rule_registry.register("instrument_allowlist", _InstrumentAllowlistPlugin())
-    rule.registry.register("vpin_circuit_breaker", _VPINCircuitBreakerPlugin())
+    rule_registry.register("vpin_circuit_breaker", _VPINCircuitBreakerPlugin())
 
 
 register()
