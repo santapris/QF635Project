@@ -116,6 +116,11 @@ class OMSSpec(BaseModel):
     # because the policy is to *adopt* pre-existing state (recover mid-trade),
     # not wipe it. Only enable for environments that must start from flat.
     cancel_stale_orders_on_start: bool = False
+    # Internal netting / self-trade prevention. When True (default), the OMS
+    # holds back any leg that would cross a *different* strategy's resting order
+    # on the same instrument, so the firm never trades with itself. Disable only
+    # for single-strategy setups or to measure its effect.
+    self_trade_prevention: bool = True
 
 
 class PositionSpec(BaseModel):

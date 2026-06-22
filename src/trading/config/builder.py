@@ -214,6 +214,7 @@ def build_live_app(config: AppConfig) -> LiveApp:
         bus=bus, clock=clock,
         signal_ttl_seconds=config.oms.signal_ttl_seconds,
         algo_driver_interval_seconds=config.oms.algo_driver_interval_seconds,
+        self_trade_prevention=config.oms.self_trade_prevention,
     )
 
     ctx = BuildContext(
@@ -308,6 +309,7 @@ def build_backtest_app(config: AppConfig) -> BacktestApp:
         bus=bus, clock=clock,
         signal_ttl_seconds=config.oms.signal_ttl_seconds,
         algo_driver_interval_seconds=config.oms.algo_driver_interval_seconds,
+        self_trade_prevention=config.oms.self_trade_prevention,
     )
 
     sim_cfg = sim_config_from_params(gw_spec.params, gw_spec.venue)

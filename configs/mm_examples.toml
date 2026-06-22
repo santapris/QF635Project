@@ -1,0 +1,137 @@
+# Example backtest config exercising the four added market-making strategies
+# (GLFT, OBI-alpha, grid, microprice) on the tiny synthetic dataset. All four
+# quote the same SIM:BTC-USDT instrument with their own strategy_id, so one
+# run smoke-tests every new plugin end-to-end.
+#
+# Run with:
+#   python -m trading.runners.run_backtest --config configs/mm_examples.toml
+#
+# Spreads here are deliberately tight (sub-bps) so resting quotes sit near the
+# touch and fill against the synthetic ~1.1/bar moves — production configs would
+# use wider, vol-scaled spreads. The requote gates are zeroed so quotes track
+# every bar (the "every-tick" backtest mode documented on each strategy).
+
+[[instruments]]
+symbol = "BTC-USDT"
+exchange = "SIM"
+asset_type = "SPOT"
+base_currency = "BTC"
+quote_currency = "USDT"
+tick_size = "0.01"
+lot_size = "0.0001"
+
+[bus]
+backend = "asyncio"
+queue_size = 10000
+
+[oms]
+signal_ttl_seconds = 300.0
+
+[position]
+method = "WAVG"
+mark_to_market_interval_seconds = 5.0
+
+# --- Strategies -------------------------------------------------------------
+
+[[strategies]]
+strategy_id = "glft-1"
+type = "glft"
+instruments = ["SIM:BTC-USDT"]
+[strategies.parameters]
+gamma = "0.2"
+k = "1.5"
+A = "140.0"
+min_vol = "0.5"
+quote_size = "0.01"
+max_position = "0.5"
+n_levels = "1"
+min_price_move_ticks = "1"
+
+[[strategies]]
+strategy_id = "obi-1"
+type = "obi_alpha"
+instruments = ["SIM:BTC-USDT"]
+[strategies.parameters]
+target_spread_bps = "0.4"
+inventory_skew_bps = "0.2"
+obi_alpha = "0.0"
+ofi_alpha = "0.0"
+quote_size = "0.01"
+max_position = "0.5"
+min_price_move_ticks = "1"
+
+[[strategies]]
+strategy_id = "grid-1"
+type = "grid"
+instruments = ["SIM:BTC-USDT"]
+[strategies.parameters]
+n_levels = "3"
+grid_step_bps = "0.3"
+inventory_skew_bps = "0.2"
+quote_size = "0.01"
+max_position = "0.5"
+min_quote_interval_s = "0"
+requote_threshold_bps = "0"
+
+[[strategies]]
+strategy_id = "micro-1"
+type = "microprice_mm"
+instruments = ["SIM:BTC-USDT"]
+[strategies.parameters]
+target_spread_bps = "0.4"
+inventory_skew_bps = "0.2"
+quote_size = "0.01"
+max_position = "0.5"
+min_quote_interval_s = "0"
+requote_threshold_bps = "0"
+
+# --- Risk -------------------------------------------------------------------
+
+[[risk.global_rules]]
+type = "instrument_allowlist"
+[risk.global_rules.params]
+allowed_instrument_ids = "SIM:BTC-USDT"
+
+[[risk.per_strategy."glft-1"]]
+type = "max_position"
+[risk.per_strategy."glft-1".params]
+max_long = "0.5"
+max_short = "0.5"
+
+[[risk.per_strategy."obi-1"]]
+type = "max_position"
+[risk.per_strategy."obi-1".params]
+max_long = "0.5"
+max_short = "0.5"
+
+[[risk.per_strategy."grid-1"]]
+type = "max_position"
+[risk.per_strategy."grid-1".params]
+max_long = "0.5"
+max_short = "0.5"
+
+[[risk.per_strategy."micro-1"]]
+type = "max_position"
+[risk.per_strategy."micro-1".params]
+max_long = "0.5"
+max_short = "0.5"
+
+# --- Gateway + backtest -----------------------------------------------------
+
+[[order_gateways]]
+venue = "SIM"
+type = "backtest"
+maker_bps = 1.0
+taker_bps = 5.0
+submit_ack_ms = 1.0
+cancel_ack_ms = 1.0
+fill_ms = 1.0
+seed = 42
+
+[backtest]
+data_path = "configs/sample_data.csv"
+instrument_id = "SIM:BTC-USDT"
+snapshot_interval_seconds = 30.0
+initial_equity = 100000.0
+periods_per_year = 525600   # 1-minute bars in 24/7 markets
+timestamp_unit = "ms"

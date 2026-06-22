@@ -6,6 +6,7 @@ or observability without circular dependencies.
 
 from .avellaneda_stoikov import ASQuotes, AvellanedaStoikov
 from .classifiers import BVCClassifier, TickRuleClassifier
+from .glft import GLFT, GLFTQuotes
 from .imbalance import OBI, OFI
 from .microprice import Microprice
 from .quote_filters import passes_min_notional, post_only_guard, round_to_lot, round_to_tick
@@ -19,6 +20,8 @@ __all__ = [
     "AvellanedaStoikov",
     "BVCClassifier",
     "EWMAVolatility",
+    "GLFT",
+    "GLFTQuotes",
     "Microprice",
     "OBI",
     "OFI",

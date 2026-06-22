@@ -77,10 +77,10 @@ In deployment, the same variables are injected by the orchestrator (K8s
 - Core domain model (Decimal money, NewType IDs, frozen Pydantic events)
 - Event bus (in-memory, asyncio, Kafka)
 - Feed handler with order book reconstruction and reconnect logic
-- Strategy framework with momentum / mean-reversion / market-making / ping-pong examples
+- Strategy framework with momentum / mean-reversion / market-making / ping-pong examples, plus market-making models: Avellaneda-Stoikov, GLFT (Guéant-Lehalle-Fernandez-Tapia, single + grid), order-book-imbalance alpha, grid/ladder, and microprice
 - Risk engine with clamping rules, throttle, and latched kill switch
 - Position engine with WAVG / FIFO / LIFO accounting
-- OMS with state machine, signal/decision join, and TWAP/VWAP execution
+- OMS with state machine, signal/decision join, TWAP/VWAP execution, and cross-strategy internal netting (self-trade prevention)
 - Simulation order_gateway (paper trading) and backtest order_gateway (time-jumping)
 - Binance Spot & Futures order_gateway with REST/WebSocket, depth book management, and testnet connectivity
 - Backtest engine with deterministic simulated clock, Sharpe/Sortino/drawdown metrics
@@ -141,7 +141,7 @@ modules sitting next to each implementation:
 ```
 order_gateways/binance/plugin.py          → registers "binance"
 order_gateways/simulation_plugin.py       → registers "simulation", "backtest"
-strategy/examples/plugins.py              → registers "momentum", "mean_reversion", ...
+strategy/examples/plugins.py              → registers "momentum", "mean_reversion", "avellaneda_stoikov", "glft", "obi_alpha", "grid", "microprice_mm", ...
 risk/rules/plugins.py                     → registers "max_position", "throttle", ...
 ```
 

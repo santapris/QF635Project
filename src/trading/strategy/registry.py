@@ -229,10 +229,14 @@ class StrategyRegistry:
         if isinstance(event, TickEvent):
             diagnostics = strategy.get_strategy_diagnostics()
             if diagnostics is not None:
-                try: 
+                try:
                     await self._bus.publish(Topic.ANALYTICS, StrategyDiagnosticsEvent(**diagnostics))
                 except Exception:
-                    _log.warning("strategy_diagnostics_publish_failed", strategy_id=sid, error=structlog.exc_info(), exc_info=True)
+                    _log.warning(
+                        "strategy_diagnostics_publish_failed",
+                        strategy_id=sid,
+                        exc_info=True,
+                    )
 
     # --- Helpers -----------------------------------------------------------
 
