@@ -64,6 +64,7 @@ from ..event_bus.base import AbstractEventBus, Topic
 
 if TYPE_CHECKING:
     from ..position.engine import PositionEngine
+    from .latency import LatencyCollector
 
 _log = structlog.get_logger(__name__)
 
@@ -163,11 +164,13 @@ class DashboardServer:
         port: int = 8765,
         host: str = "0.0.0.0",
         position_engine: "PositionEngine | None" = None,
+        latency_collector: "LatencyCollector | None" = None,
     ) -> None:
         self._bus = bus
         self._port = port
         self._host = host
         self._position_engine = position_engine
+        self._latency_collector = latency_collector
         self._clients: MutableSet[Any] = set()
         self._broadcast_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10_000)
         self._broadcaster_task: asyncio.Task[None] | None = None
@@ -184,10 +187,9 @@ class DashboardServer:
         # Latest exchange-reported net positions (ground truth, for the
         # 'net' row shown alongside per-strategy positions).
         self._latest_venue_positions: VenuePositionSnapshotEvent | None = None
-        # Latest analytics microstructure snapshot, cached for the REST endpoint.
+        # Latest analytics snapshots for /state/analytics REST endpoint.
         self._latest_microstructure: MicrostructureSnapshotEvent | None = None
-        # Latest strategy diagnostic snapshot, cached for the REST endpoint.
-        self._latest_strategy_diagnostic: StrategyDiagnosticsEvent | None = None
+        self._latest_diagnostics: StrategyDiagnosticsEvent | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -336,13 +338,18 @@ class DashboardServer:
         }
     
     def _analytics_payload(self) -> dict[str, Any]:
-        micro = self._latest_microstructure
-        diag = self._latest_strategy_diagnostic
+        m = self._latest_microstructure
+        d = self._latest_diagnostics
         return {
             "timestamp": _now_iso(),
-            "microstructure": micro.model_dump(mode="json") if micro else None,
-            "strategy_diagnostic": diag.model_dump(mode="json") if diag else None,
+            "microstructure": m.model_dump(mode="json") if m is not None else None,
+            "strategy_diagnostics": d.model_dump(mode="json") if d is not None else None,
         }
+
+    def _latency_payload(self) -> dict[str, Any]:
+        if self._latency_collector is None:
+            return {"timestamp": _now_iso(), "stages": {}}
+        return {"timestamp": _now_iso(), "stages": self._latency_collector.snapshot()}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -370,6 +377,9 @@ class DashboardServer:
 
         async def analytics_endpoint(request: Request) -> JSONResponse:
             return JSONResponse(self._analytics_payload())
+
+        async def latency_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._latency_payload())
 
         async def websocket_endpoint(ws: WebSocket) -> None:
             await ws.accept()
@@ -404,6 +414,7 @@ class DashboardServer:
                 Route("/state/account", account_endpoint, methods=["GET"]),
                 Route("/state/open_orders", open_orders_endpoint, methods=["GET"]),
                 Route("/state/analytics", analytics_endpoint, methods=["GET"]),
+                Route("/state/latency", latency_endpoint, methods=["GET"]),
                 WebSocketRoute("/ws", websocket_endpoint),
             ],
             middleware=middleware,
@@ -434,7 +445,7 @@ class DashboardServer:
         if isinstance(event, MicrostructureSnapshotEvent):
             self._latest_microstructure = event
         elif isinstance(event, StrategyDiagnosticsEvent):
-            self._latest_strategy_diagnostic = event
+            self._latest_diagnostics = event
 
     async def _broadcast_loop(self) -> None:
         """Drain the broadcast queue and send to all connected clients."""

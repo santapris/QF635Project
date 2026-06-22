@@ -254,7 +254,7 @@ class OMSEngine:
             rationale=signal.rationale,
             metadata=signal.metadata,
         )
-        await self._reconcile_quotes(approved_signal)
+        await self._reconcile_quotes(approved_signal, decision_ts_ingest=event.ts_ingest)
 
     async def _on_order_event(self, event: BaseEvent) -> None:
         """Handle order_gateway responses on the orders topic."""
@@ -521,7 +521,7 @@ class OMSEngine:
 
     # --- Quote reconciliation and placement ------------------------------
 
-    async def _reconcile_quotes(self, signal: SignalEvent) -> None:
+    async def _reconcile_quotes(self, signal: SignalEvent, *, decision_ts_ingest: int = 0) -> None:
         """Reconcile open orders against the strategy's desired leg state.
 
         Each leg is first routed: PASSIVE / small clips become *immediate*
@@ -552,14 +552,14 @@ class OMSEngine:
             else:
                 sliced_legs.append((leg, decision.algo))
 
-        await self._reconcile_immediate(signal, immediate_legs)
+        await self._reconcile_immediate(signal, immediate_legs, decision_ts_ingest=decision_ts_ingest)
         await self._reconcile_sliced(signal, sliced_legs)
         # One snapshot after the whole reconcile — covers every place/cancel
         # above without emitting a burst of intermediate snapshots.
         await self._publish_open_orders()
 
     async def _reconcile_immediate(
-        self, signal: SignalEvent, legs: list[OrderLeg]
+        self, signal: SignalEvent, legs: list[OrderLeg], *, decision_ts_ingest: int = 0
     ) -> None:
         """Match-or-amend-or-replace reconciliation for non-sliced legs.
 
@@ -633,7 +633,7 @@ class OMSEngine:
             matched.add(candidate.order_id) if candidate is not None else None
 
             if candidate is None:
-                await self._place_quote(signal, leg)
+                await self._place_quote(signal, leg, decision_ts_ingest=decision_ts_ingest)
             elif candidate.status in (OrderStatus.PENDING_AMEND, OrderStatus.PENDING_CANCEL):
                 pass  # in-flight op — wait for confirm, retry next tick
             elif candidate.status in amendable:
@@ -825,7 +825,7 @@ class OMSEngine:
         except Exception:
             _log.exception("reconcile_cancel_failed", order_id=order_id, reason=why)
 
-    async def _place_quote(self, signal: SignalEvent, leg: OrderLeg) -> None:
+    async def _place_quote(self, signal: SignalEvent, leg: OrderLeg, *, decision_ts_ingest: int = 0) -> None:
         """Submit a single leg from a reconciled SignalEvent."""
         order_id = OrderId(uuid4())
         client_order_id = ClientOrderId(
@@ -860,6 +860,7 @@ class OMSEngine:
             quantity=leg.quantity,
             price=leg.price,
             time_in_force=leg.time_in_force,
+            upstream_ts_ns=decision_ts_ingest or None,
         )
         if not await self._safe_publish(Topic.ORDERS, req):
             order.transition_to(OrderStatus.REJECTED, at_ns=self._clock.now_ns())
