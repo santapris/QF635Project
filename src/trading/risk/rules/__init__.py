@@ -6,6 +6,7 @@ from .max_notional import MaxNotionalRule
 from .max_order_size import MaxOrderSizeRule
 from .max_position import MaxPositionRule
 from .throttle import ThrottleRule
+from .vpin_circuit_breaker import VPINCircuitBreakerRule
 
 __all__ = [
     "DailyLossLimitRule",
@@ -14,4 +15,5 @@ __all__ = [
     "MaxOrderSizeRule",
     "MaxPositionRule",
     "ThrottleRule",
+    "VPINCircuitBreakerRule",
 ]

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from ..core.clock import Clock
-from ..core.events import FillEvent, OpenOrdersSnapshotEvent, PositionUpdateEvent
+from ..core.events import FillEvent, MicrostructureSnapshotEvent, OpenOrdersSnapshotEvent, PositionUpdateEvent
 from ..core.instruments import Instrument
 from ..core.types import Price, Quantity, StrategyId, Timestamp
 
@@ -52,6 +52,10 @@ class RiskState:
         self._daily_pnl: dict[StrategyId, _StrategyDailyPnL] = {}
         # One sliding window of recent signal timestamps per strategy.
         self._recent_signals: dict[StrategyId, deque[Timestamp]] = defaultdict(deque)
+        # Latest VPIN value per instrument_id (VPIN is instrument-level, not strategy-level)
+        self._vpin_values: dict[str, float] = {}
+        # Consecutive ticks above VPIN threshold per instrument_id and threshold_str to support multiple VPIN-based rules with different thresholds
+        self._vpin_breach_ticks: dict[tuple[str, str], int] = {}
 
     # --- Read API (used by rules) -----------------------------------------
 
@@ -93,6 +97,20 @@ class RiskState:
     def get_realized_pnl_today(self, strategy_id: StrategyId) -> Price:
         bucket = self._daily_pnl.get(strategy_id)
         return bucket.realized_pnl if bucket else Decimal(0)
+    
+    def get_vpin(self, strategy_id: StrategyId, instrument_id: str) -> float | None:
+        """Get the latest VPIN value for the given strategy and instrument.
+        Returns None if no VPIN value is available (e.g., still warming up).
+        VPIN is instrument-level, so strategy_id is not used in this implementation, but included in the signature for potential future extensions where VPIN might be strategy-specific.
+        """
+        return self._vpin_values.get(instrument_id)
+    
+    def get_vpin_breach_ticks(self, strategy_id: StrategyId, instrument_id: str, threshold: float = 0.8) -> int:
+        """Get the number of consecutive ticks the VPIN has been above the specified threshold for the given instrument.
+        Returns 0 if no breach is currently active.
+        """
+        key = (instrument_id, str(threshold))
+        return self._vpin_breach_ticks.get(key, 0)
 
     def signals_in_window(
         self, strategy_id: StrategyId, *, window_seconds: float | None = None
@@ -173,6 +191,27 @@ class RiskState:
             (e.strategy_id, e.instrument.instrument_id): (e.working_buy, e.working_sell)
             for e in snapshot.exposures
         }
+
+    def apply_analytics_snapshot(self, snapshot: MicrostructureSnapshotEvent) -> None:
+        """Update cached VPIN values and breach ticks from microstructure data.
+
+        Called by engine on every microstructure snapshot, which includes VPIN data for all instruments. We update our internal state to reflect the latest VPIN values and calculate breach ticks for any thresholds we are tracking.
+        Prepopulates common thresholds to avoid cold start
+        
+        """
+        instrument_id = snapshot.instrument.instrument_id
+        vpin_value = snapshot.vpin
+        if vpin_value is None:
+            return
+        self._vpin_values[instrument_id] = vpin_value
+
+        # Update breach ticks for all tracked thresholds for this instrument
+        for threshold in (0.7, 0.8, 0.9):  # Prepopulate common thresholds; can be extended to track more
+            key = (instrument_id, str(float(threshold)))
+            if vpin_value >= threshold:
+                self._vpin_breach_ticks[key] = self._vpin_breach_ticks.get(key, 0) + 1
+            else:
+                self._vpin_breach_ticks[key] = 0
 
     def start_new_session(self) -> None:
         """Reset day-bucketed counters. Called by the engine at session rollover."""
