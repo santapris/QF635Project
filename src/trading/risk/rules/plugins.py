@@ -92,7 +92,7 @@ class _VPINCircuitBreakerPlugin:
 
     def build(self, params: VPINCircuitBreakerParams):
         return VPINCircuitBreakerRule(
-            vpin_threshold=params.vpin_threshold,
+            threshold=params.vpin_threshold,
             sustained_ticks=params.sustained_ticks,
         )
 
@@ -113,7 +113,7 @@ def register() -> None:
     rule_registry.register("throttle", _ThrottlePlugin())
     rule_registry.register("daily_loss_limit", _DailyLossLimitPlugin())
     rule_registry.register("instrument_allowlist", _InstrumentAllowlistPlugin())
-    rule.registry.register("vpin_circuit_breaker", _VPINCircuitBreakerPlugin())
+    rule_registry.register("vpin_circuit_breaker", _VPINCircuitBreakerPlugin())
 
 
 register()

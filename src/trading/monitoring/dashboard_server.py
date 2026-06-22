@@ -48,6 +48,7 @@ import logging
 import threading
 from collections.abc import MutableSet
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -81,6 +82,25 @@ _STREAM_TOPICS = (
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+_BACKTEST_IDLE: dict[str, Any] = {
+    "status": "idle", "result": None, "error": None,
+    "started_at": None, "completed_at": None,
+}
+
+# src/trading/monitoring/dashboard_server.py -> repo_root/configs
+_CONFIGS_DIR = Path(__file__).resolve().parents[3] / "configs"
+
+
+def _resolve_backtest_config_path(name: str) -> str | None:
+    """Map a bare config filename (as offered by /backtest/configs) to a real
+    path under _CONFIGS_DIR. Rejects anything else to avoid arbitrary file
+    reads via a client-supplied path."""
+    candidate = _CONFIGS_DIR / Path(name).name
+    if candidate.is_file() and candidate.suffix == ".toml":
+        return str(candidate)
+    return None
 
 
 def _event_to_message(topic: str, event: BaseEvent) -> str:
@@ -188,6 +208,16 @@ class DashboardServer:
         self._latest_microstructure: MicrostructureSnapshotEvent | None = None
         # Latest strategy diagnostic snapshot, cached for the REST endpoint.
         self._latest_strategy_diagnostic: StrategyDiagnosticsEvent | None = None
+        # Event-driven pair backtest state, polled via REST and pushed on the
+        # WS "backtest" topic. _backtest_lock is a threading.Lock (not asyncio)
+        # because the backtest runs in a plain daemon thread, not the event
+        # loop — uvicorn's loop and the main trading loop are different loops,
+        # so cross-thread access here must not assume asyncio primitives.
+        self._backtest_state: dict[str, Any] = dict(_BACKTEST_IDLE)
+        self._backtest_lock = threading.Lock()
+        # Captured in start() so the backtest thread can call_soon_threadsafe
+        # back onto the main loop to push WS broadcasts safely.
+        self._main_loop: asyncio.AbstractEventLoop | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -203,6 +233,8 @@ class DashboardServer:
                 hint="pip install 'trading[dashboard]'",
             )
             return
+
+        self._main_loop = asyncio.get_event_loop()
 
         # Subscribe to streaming topics for the WS broadcast.
         for topic in _STREAM_TOPICS:
@@ -345,6 +377,88 @@ class DashboardServer:
         }
 
     # ------------------------------------------------------------------
+    # Strategy backtest (runs the real deployed strategy/risk/OMS pipeline
+    # against a TOML config + CSV data, via the existing BacktestEngine)
+    # ------------------------------------------------------------------
+
+    def _backtest_configs_payload(self) -> dict[str, Any]:
+        """List config files under configs/ that have a [backtest] section."""
+        configs: list[dict[str, str]] = []
+        if _CONFIGS_DIR.is_dir():
+            for path in sorted(_CONFIGS_DIR.glob("*.toml")):
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                if "[backtest]" in text:
+                    configs.append({"name": path.name, "path": str(path)})
+        return {"configs": configs}
+
+    async def _run_strategy_backtest_async(self, config_path: str) -> dict[str, Any]:
+        from ..config import build_backtest_app, load_config
+
+        config = load_config(config_path)
+        app = build_backtest_app(config)
+        report = await app.run()
+        d = report.to_dict()
+        d["config_path"] = config_path
+        d["equity_curve"] = [
+            [p.ts_ns, p.total_pnl] for p in report.equity_points
+        ]
+        return d
+
+    def _run_backtest_in_thread(self, params: dict[str, Any]) -> None:
+        """Run the backtest synchronously in a fresh event loop. Called in a
+        daemon thread by the endpoint — keeps the strategy/risk/OMS pipeline's
+        own AsyncioBus isolated from the main trading loop entirely."""
+        started_at = _now_iso()
+        with self._backtest_lock:
+            self._backtest_state = {
+                "status": "running", "result": None, "error": None,
+                "started_at": started_at, "completed_at": None,
+            }
+
+        config_name = params.get("config", "")
+        config_path = _resolve_backtest_config_path(config_name)
+
+        try:
+            if config_path is None:
+                raise ValueError(f"unknown backtest config: {config_name!r}")
+            d = asyncio.run(self._run_strategy_backtest_async(config_path))
+
+            with self._backtest_lock:
+                self._backtest_state = {
+                    "status": "complete", "result": d, "error": None,
+                    "started_at": started_at, "completed_at": _now_iso(),
+                }
+            ws_data: dict[str, Any] = {"status": "complete", "result": d}
+
+        except Exception as exc:
+            _log.warning("backtest_failed", error=str(exc))
+            with self._backtest_lock:
+                self._backtest_state = {
+                    "status": "error", "result": None, "error": str(exc),
+                    "started_at": started_at, "completed_at": _now_iso(),
+                }
+            ws_data = {"status": "error", "result": None, "error": str(exc)}
+
+        # Push result onto the WS broadcast queue via the main loop — this is
+        # safe because call_soon_threadsafe is designed for cross-thread use.
+        if self._main_loop is not None:
+            msg = json.dumps({
+                "topic": "backtest",
+                "event_type": "backtest_result",
+                "timestamp": _now_iso(),
+                "data": ws_data,
+            }, default=str)
+            try:
+                self._main_loop.call_soon_threadsafe(
+                    self._broadcast_queue.put_nowait, msg
+                )
+            except Exception:
+                pass  # best-effort; frontend also polls REST
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -371,6 +485,29 @@ class DashboardServer:
         async def analytics_endpoint(request: Request) -> JSONResponse:
             return JSONResponse(self._analytics_payload())
 
+        async def backtest_configs_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._backtest_configs_payload())
+
+        async def backtest_run_endpoint(request: Request) -> JSONResponse:
+            with self._backtest_lock:
+                if self._backtest_state["status"] == "running":
+                    return JSONResponse({"status": "running"}, status_code=409)
+            try:
+                params = await request.json()
+            except Exception:
+                params = {}
+            threading.Thread(
+                target=self._run_backtest_in_thread,
+                args=(params,),
+                name="backtest-run",
+                daemon=True,
+            ).start()
+            return JSONResponse({"status": "running"})
+
+        async def backtest_result_endpoint(request: Request) -> JSONResponse:
+            with self._backtest_lock:
+                return JSONResponse(self._backtest_state)
+
         async def websocket_endpoint(ws: WebSocket) -> None:
             await ws.accept()
             clients.add(ws)
@@ -387,13 +524,13 @@ class DashboardServer:
                 _log.debug("dashboard_client_disconnected", total=len(clients))
 
         # CORSMiddleware handles both preflight OPTIONS and actual response
-        # headers for all origins. The dashboard is a read-only operator
-        # tool; permissive CORS is fine here.
+        # headers for all origins. The dashboard is mostly read-only, except
+        # for POST /backtest/run which triggers an operator-initiated backtest.
         middleware = [
             Middleware(
                 CORSMiddleware,
                 allow_origins=["*"],
-                allow_methods=["GET", "OPTIONS"],
+                allow_methods=["GET", "POST", "OPTIONS"],
                 allow_headers=["*"],
             )
         ]
@@ -404,6 +541,9 @@ class DashboardServer:
                 Route("/state/account", account_endpoint, methods=["GET"]),
                 Route("/state/open_orders", open_orders_endpoint, methods=["GET"]),
                 Route("/state/analytics", analytics_endpoint, methods=["GET"]),
+                Route("/backtest/configs", backtest_configs_endpoint, methods=["GET"]),
+                Route("/backtest/run", backtest_run_endpoint, methods=["POST"]),
+                Route("/backtest/result", backtest_result_endpoint, methods=["GET"]),
                 WebSocketRoute("/ws", websocket_endpoint),
             ],
             middleware=middleware,
