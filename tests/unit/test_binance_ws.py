@@ -232,6 +232,16 @@ def _execution_report_new(client_id: str) -> dict:
     }
 
 
+def _execution_report_replaced(client_id: str) -> dict:
+    return {
+        "e": "executionReport", "E": 1700000000000, "s": "BTCUSDT",
+        "c": client_id, "S": "BUY", "o": "LIMIT", "f": "GTC",
+        "q": "1.0", "p": "49990", "x": "REPLACED", "X": "NEW",
+        "i": 12345678, "l": "0", "z": "0", "L": "0", "n": "0", "N": "USDT",
+        "T": 1700000000004,
+    }
+
+
 async def _make_user_data_stream(mapper, btc_binance):
     """Build a UDS without starting it; we'll exercise _handle_frame directly."""
     bus = MemoryBus()
@@ -345,6 +355,27 @@ async def test_user_data_new_does_not_duplicate_ack(mapper, btc_binance):
     post_ack_count = sum(1 for e in bus.published_on(Topic.ORDERS)
                          if isinstance(e, OrderAcknowledged))
     assert post_ack_count == pre_ack_count
+
+
+async def test_user_data_replaced_does_not_duplicate_or_strand(mapper, btc_binance):
+    """The WS sends REPLACED after a Futures PUT amend. The order_gateway has
+    already published OrderAmended from the REST response, so the WS copy must
+    be suppressed — not left to fall through the unhandled branch (which would
+    strand the order in PENDING_AMEND)."""
+    bus, stream = await _make_user_data_stream(mapper, btc_binance)
+    order_id = OrderId(uuid4())
+    client_id = ClientOrderId("strat-rep-1")
+    await bus.subscribe(Topic.ORDERS, stream._on_order_event)
+    await bus.publish(Topic.ORDERS, OrderAcknowledged(
+        ts_event=1, ts_ingest=1, source="binance",
+        order_id=order_id, client_order_id=client_id,
+        exchange_order_id=ExchangeOrderId("ex-rep"),
+    ))
+    pre_count = len(bus.published_on(Topic.ORDERS))
+    import json
+    await stream._handle_frame(json.dumps(_execution_report_replaced(client_id)))
+    # No further ORDERS event should be published for the REPLACED report.
+    assert len(bus.published_on(Topic.ORDERS)) == pre_count
 
 
 async def test_user_data_skips_unknown_client_order_id(mapper, btc_binance):

@@ -341,7 +341,16 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
             strategy_id=ctx.strategy_id,
             instrument=event.instrument,
             legs=tuple(legs),
-            # TODO - the inventory always remains the same - not clear if it's an issue with the position engine or the inventory calculation
+            # Inventory is sourced from the position engine via
+            # ctx.portfolio.get_position(instrument, strategy_id). Fills are
+            # attributed to this strategy_id end-to-end (live: stamped by
+            # OMS.strategy_id_for_client_order; sim/backtest: copied from the
+            # order request), verified by
+            # tests/integration/test_as_strategy_integration.py
+            # ::test_fill_is_attributed_to_strategy_inventory. If inventory looks
+            # flat in a run, check that orders are actually *filling* — with
+            # realistic spreads A-S can rest without trading, so inventory
+            # legitimately stays at 0.
             rationale=f"as-mm inv={inventory:.6f}",
         )]
 

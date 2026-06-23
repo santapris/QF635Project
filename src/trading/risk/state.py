@@ -29,13 +29,24 @@ from ..core.events import FillEvent, OpenOrdersSnapshotEvent, PositionUpdateEven
 from ..core.instruments import Instrument
 from ..core.types import Price, Quantity, StrategyId, Timestamp
 
+_NS_PER_DAY = 86_400_000_000_000
+
 
 @dataclass(slots=True)
 class _StrategyDailyPnL:
-    """Day-bucketed realized PnL for one strategy."""
+    """Day-bucketed realized PnL for one strategy.
 
-    realized_pnl: Price = Decimal(0)
-    day_start_ns: Timestamp = 0
+    The position engine reports *cumulative* (lifetime) realized PnL. To get
+    "today's" PnL we subtract the cumulative value captured at the start of the
+    current UTC day (``baseline_pnl``) from the latest cumulative value
+    (``cumulative_pnl``). The day rolls over automatically when the UTC calendar
+    day changes — see :meth:`RiskState._maybe_rollover` — so the daily loss cap
+    resets each day without needing an external scheduler.
+    """
+
+    cumulative_pnl: Price = Decimal(0)
+    baseline_pnl: Price = Decimal(0)
+    day_index: int = -1
 
 
 class RiskState:
@@ -92,7 +103,12 @@ class RiskState:
 
     def get_realized_pnl_today(self, strategy_id: StrategyId) -> Price:
         bucket = self._daily_pnl.get(strategy_id)
-        return bucket.realized_pnl if bucket else Decimal(0)
+        if bucket is None:
+            return Decimal(0)
+        # Roll the day forward on read too, so an idle strategy's stale loss
+        # doesn't keep the kill switch armed past midnight UTC.
+        self._maybe_rollover(bucket)
+        return bucket.cumulative_pnl - bucket.baseline_pnl
 
     def signals_in_window(
         self, strategy_id: StrategyId, *, window_seconds: float | None = None
@@ -147,12 +163,18 @@ class RiskState:
 
         bucket = self._daily_pnl.get(update.strategy_id)
         if bucket is None:
+            # First sight of this strategy: treat today's PnL as the full
+            # cumulative value (baseline 0), matching a flat day start.
             self._daily_pnl[update.strategy_id] = _StrategyDailyPnL(
-                realized_pnl=update.realized_pnl,
-                day_start_ns=self._clock.now_ns(),
+                cumulative_pnl=update.realized_pnl,
+                baseline_pnl=Decimal(0),
+                day_index=self._day_index(),
             )
         else:
-            bucket.realized_pnl = update.realized_pnl
+            # Roll over *before* recording the new value so the baseline
+            # captures yesterday's ending cumulative PnL, not today's.
+            self._maybe_rollover(bucket)
+            bucket.cumulative_pnl = update.realized_pnl
 
     def apply_open_orders_snapshot(self, snapshot: OpenOrdersSnapshotEvent) -> None:
         """Replace working-order exposure from the OMS's snapshot.
@@ -175,11 +197,29 @@ class RiskState:
         }
 
     def start_new_session(self) -> None:
-        """Reset day-bucketed counters. Called by the engine at session rollover."""
-        now_ns = self._clock.now_ns()
+        """Force a day-bucket rollover for every strategy.
+
+        Rollover is automatic on UTC-day change (see :meth:`_maybe_rollover`),
+        so this is only needed to *manually* reset the daily loss cap mid-day —
+        e.g. an operator clearing the kill switch and starting a fresh session.
+        """
+        today_idx = self._day_index()
         for bucket in self._daily_pnl.values():
-            bucket.realized_pnl = Decimal(0)
-            bucket.day_start_ns = now_ns
+            bucket.baseline_pnl = bucket.cumulative_pnl
+            bucket.day_index = today_idx
+
+    # --- Day-rollover helpers ---------------------------------------------
+
+    def _day_index(self) -> int:
+        """UTC day number (days since the epoch) for the current clock time."""
+        return self._clock.now_ns() // _NS_PER_DAY
+
+    def _maybe_rollover(self, bucket: _StrategyDailyPnL) -> None:
+        """Reset the daily baseline if the UTC calendar day has advanced."""
+        today_idx = self._day_index()
+        if bucket.day_index != today_idx:
+            bucket.baseline_pnl = bucket.cumulative_pnl
+            bucket.day_index = today_idx
 
 
 __all__ = ["RiskState"]

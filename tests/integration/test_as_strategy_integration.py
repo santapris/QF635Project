@@ -189,6 +189,67 @@ async def test_as_no_crossing_orders_on_tight_spread(sim_clock, btcf) -> None:
         await bus.stop()
 
 
+async def test_fill_is_attributed_to_strategy_inventory(sim_clock, btcf) -> None:
+    """A fill stamped with the strategy's id must update the exact position the
+    A-S strategy reads for inventory skew.
+
+    This pins down the historical "inventory always remains the same" TODO: the
+    strategy reads ``ctx.portfolio.get_position(instrument, strategy_id)``, and a
+    fill keyed by that same strategy_id (as the live gateway stamps it via
+    ``OMS.strategy_id_for_client_order``) must flow through to that read. If the
+    attribution key ever drifts (e.g. fills land under "unknown"), inventory
+    stays flat and the reservation-price skew silently dies — this test fails.
+    """
+    from uuid import uuid4
+
+    from trading.core.events import FillEvent
+    from trading.core.types import (
+        ClientOrderId,
+        ExchangeOrderId,
+        FillId,
+        OrderId,
+        Side,
+    )
+
+    bus = AsyncioBus(queue_size=5000)
+    pos = PositionEngine(bus=bus, clock=sim_clock, method=AccountingMethod.WAVG)
+    portfolio = EnginePortfolioView(pos)
+
+    await pos.start()
+    await bus.start()
+    try:
+        # The strategy reads inventory via this exact call.
+        assert portfolio.get_position(btcf, _STRATEGY_ID) is None
+
+        await bus.publish(Topic.FILLS, FillEvent(
+            fill_id=FillId(uuid4()),
+            ts_event=sim_clock.now_ns(), ts_ingest=sim_clock.now_ns(),
+            source="binance",
+            order_id=OrderId(uuid4()),
+            client_order_id=ClientOrderId(f"{_STRATEGY_ID}-0123456789ab"),
+            exchange_order_id=ExchangeOrderId("ex-1"),
+            strategy_id=_STRATEGY_ID,
+            instrument=btcf,
+            side=Side.SELL,
+            fill_price=Decimal("50001.00"),
+            fill_quantity=Decimal("0.003"),
+            cumulative_quantity=Decimal("0.003"),
+            leaves_quantity=Decimal("0"),
+            fee=Decimal("0"),
+            fee_currency="USDT",
+            is_maker=True,
+        ))
+        await asyncio.sleep(0.05)
+
+        position = portfolio.get_position(btcf, _STRATEGY_ID)
+        assert position is not None, "fill did not reach the strategy's position view"
+        assert position.quantity == Decimal("-0.003"), (
+            "inventory not updated by fill — attribution key drifted"
+        )
+    finally:
+        await bus.stop()
+
+
 async def test_as_fill_updates_position(sim_clock, btcf) -> None:
     """Resting sell quote filled by aggressor trade → position goes short."""
     bus = AsyncioBus(queue_size=5000)

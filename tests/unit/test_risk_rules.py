@@ -18,6 +18,7 @@ from trading.core import (
     WorkingExposure,
 )
 from trading.risk import RiskState
+from trading.risk.state import _NS_PER_DAY
 from trading.risk.rules import (
     DailyLossLimitRule,
     InstrumentAllowlistRule,
@@ -184,6 +185,36 @@ def test_daily_loss_limit_triggers_kill_severity(clock, btc, strategy_id) -> Non
     result = rule.evaluate(sig, sig.legs[0], state)
     assert not result.approved
     assert result.severity == Severity.KILL
+
+
+def test_daily_loss_limit_resets_on_new_day(sim_clock, btc, strategy_id) -> None:
+    """Yesterday's realized loss must not keep the kill switch armed today."""
+    state = RiskState(clock=sim_clock)
+    rule = DailyLossLimitRule(max_loss=Decimal("1000"))
+    sig = _signal(sim_clock, btc, strategy_id)
+
+    def _update(cumulative_pnl: str) -> None:
+        state.apply_position_update(PositionUpdateEvent(
+            ts_event=sim_clock.now_ns(), ts_ingest=sim_clock.now_ns(), source="t",
+            strategy_id=strategy_id, instrument=btc,
+            quantity=Decimal(0), average_entry_price=Decimal(0),
+            realized_pnl=Decimal(cumulative_pnl), unrealized_pnl=Decimal(0),
+            mark_price=Decimal("50000"),
+        ))
+
+    # Day 1: lose 2000 (cumulative -2000) -> breach.
+    _update("-2000")
+    assert not rule.evaluate(sig, sig.legs[0], state).approved
+
+    # Roll into the next UTC day. Cumulative PnL is unchanged, so *today's*
+    # loss is ~0 and the cap should approve again.
+    sim_clock.advance(_NS_PER_DAY)
+    _update("-2000")
+    assert rule.evaluate(sig, sig.legs[0], state).approved
+
+    # Fresh losses on the new day still count: another -1500 today -> breach.
+    _update("-3500")
+    assert not rule.evaluate(sig, sig.legs[0], state).approved
 
 
 def test_instrument_allowlist_rejects(clock, btc, eth, strategy_id) -> None:
