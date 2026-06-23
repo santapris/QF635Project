@@ -249,7 +249,7 @@ class ApprovedLeg(BaseModel):
     approved_quantity: Quantity
     """Quantity approved by risk — may be less than requested if clamped."""
     clamp_reason: str = ""
-    """Non empty when approved_quantity < requested quantity; names the rule and describes the reduction"""
+    """Non-empty when approved_quantity < requested quantity; names the rule and describes the reduction."""
 
 
 class RejectedLeg(BaseModel):
@@ -333,6 +333,7 @@ class OrderRequest(BaseEvent):
     price: Price | None = Field(default=None, description="Required for LIMIT orders.")
     stop_price: Price | None = None
     time_in_force: TimeInForce = TimeInForce.GTC
+    upstream_ts_ns: int | None = None
 
 
 class ExecutionRoutedEvent(BaseEvent):
@@ -443,6 +444,13 @@ class FillEvent(BaseEvent):
     fee_currency: str = ""
     is_maker: bool | None = None
     venue_trade_id: str | None = None
+    mid_price_at_fill: Price | None = None
+    """Mid-price (bid+ask)/2 at the moment of fill.
+
+    Populated by the simulation gateway for backtest analysis; may be None
+    in live trading if the top-of-book snapshot was not available at fill time.
+    Enables spread capture calculation: |fill_price - mid_price_at_fill|.
+    """
 
     @property
     def is_complete(self) -> bool:

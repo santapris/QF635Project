@@ -19,6 +19,7 @@ import MStripe from "../components/bmw/MStripe";
 import SectionLabel from "../components/bmw/SectionLabel";
 import SpecCell from "../components/bmw/SpecCell";
 import GaugeStrip from "../components/bmw/GaugeStrip";
+import LatencyPanel from "../components/LatencyPanel";
 
 interface Props {
   state: PipelineState;
@@ -211,6 +212,12 @@ export default function DashboardPage({ state }: Props) {
         <Box sx={{ minHeight: 360, display: "flex", flexDirection: "column" }}>
           {tabs[tab].node}
         </Box>
+      </Box>
+
+      {/* ── Pipeline latency ────────────────────────────────────── */}
+      <Box>
+        <SectionLabel>Pipeline Latency</SectionLabel>
+        <LatencyPanel latency={state.latency} />
       </Box>
     </Box>
   );

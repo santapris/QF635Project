@@ -12,6 +12,10 @@ license = { text = "MIT" }
 authors = [{ name = "Trading Platform" }]
 dependencies = [
     "pydantic>=2.0,<3",
+    "numpy>=1.26", 
+    "pandas>=2.0",
+    "scipy>=1.12", 
+    "structlog>=24.0"
 ]
 
 [project.optional-dependencies]
@@ -36,6 +40,7 @@ dev = [
     "websockets>=12",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.29",
+    "matplotlib>=3.8"
 ]
 
 [project.scripts]
