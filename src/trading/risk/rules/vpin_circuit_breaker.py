@@ -65,7 +65,7 @@ class VPINCircuitBreakerRule(AbstractRiskRule):
         
         if vpin_value is None:
             # VPIN not yet warmed up, let strategy continue quoting
-            return RuleResult.approve(self.name, "No VPIN value available. Quoting continues.")
+            return RuleResult.approve(self.name, reason="No VPIN value available. Quoting continues.")
         
         ticks_above = state.get_vpin_breach_ticks(
             signal.strategy_id, instrument_id, threshold=self._threshold

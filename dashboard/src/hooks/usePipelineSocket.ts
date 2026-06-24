@@ -224,6 +224,23 @@ function parseMessage(raw: string): PipelineAction | null {
       };
     }
 
+    case "alerts": {
+      // The alerts topic carries both RiskAlertEvent (WARN/BLOCK — already
+      // surfaced via risk-decisions) and KillSwitchEvent. Only the latter
+      // drives the kill-switch tab; ignore the rest here.
+      if (event_type === "kill_switch") {
+        return {
+          type: "KILL_SWITCH",
+          payload: {
+            ts,
+            triggered_by: String(data.triggered_by ?? ""),
+            reason: String(data.reason ?? ""),
+          },
+        };
+      }
+      return null;
+    }
+
     case "logs": {
       const d = data as { level?: string; logger?: string; message?: string; extra?: Record<string,string> };
       return {

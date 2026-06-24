@@ -40,7 +40,7 @@ function AppInner() {
           <Route path="/" element={<DashboardPage state={state} />} />
           <Route path="/analytics" element={<AnalyticsPage state={state} />} />
           <Route path="/logs" element={<LogsPage logs={state.logs} onClear={clearLogs} />} />
-          <Route path="/killswitch" element={<KillSwitchPage />} />
+          <Route path="/killswitch" element={<KillSwitchPage killSwitch={state.killSwitch} dispatch={dispatch} />} />
           <Route path="/backtest" element={<BacktestPage backtest={state.backtest} dispatch={dispatch} />} />
         </Routes>
       </Box>

@@ -277,6 +277,20 @@ export interface LatencySnapshot {
   order_to_fill:      StageLatencyData | null;
 }
 
+/**
+ * Latched kill-switch state. A single state-of-the-world object, not an event
+ * log — the latch is either armed or engaged. `available` is false when the
+ * backend has no risk engine wired (the tab then shows "unknown" rather than a
+ * misleading ARMED).
+ */
+export interface KillSwitchState {
+  available: boolean;
+  engaged: boolean;
+  triggered_by: string;
+  reason: string;
+  ts: number | null;
+}
+
 export interface PipelineState {
   status: ConnectionStatus;
   ticks: Record<string, TickData>;          // instrument -> latest tick
@@ -300,6 +314,7 @@ export interface PipelineState {
   _lastAnalyticsSampleMs: number;           // wall-clock ms of last analyticsHistory sample
   backtest: BacktestState;                  // event-driven pair backtest run state
   latency: LatencySnapshot | null;          // latest pipeline latency percentiles
+  killSwitch: KillSwitchState | null;       // latched kill-switch state (null until first snapshot/event)
 }
 
 export const initialState: PipelineState = {
@@ -325,6 +340,7 @@ export const initialState: PipelineState = {
   _lastAnalyticsSampleMs: 0,
   backtest: _BACKTEST_INITIAL,
   latency: null,
+  killSwitch: null,
 };
 
 export type PipelineAction =
@@ -344,7 +360,11 @@ export type PipelineAction =
   | { type: "CLEAR_LOGS" }
   | { type: "ANALYTICS"; payload: AnalyticsSnapshot }
   | { type: "BACKTEST_RESULT"; payload: { status: BacktestStatus; result: BacktestResult | null; error: string | null } }
-  | { type: "LATENCY_SNAPSHOT"; payload: { ts: number; stages: Record<string, StageLatencyData | undefined> } };
+  | { type: "LATENCY_SNAPSHOT"; payload: { ts: number; stages: Record<string, StageLatencyData | undefined> } }
+  // Live WS KillSwitchEvent — the switch just engaged. Carries the trigger.
+  | { type: "KILL_SWITCH"; payload: { triggered_by: string; reason: string; ts: number } }
+  // Full latch state from the REST snapshot (on mount / poll) or the reset response.
+  | { type: "KILL_SWITCH_SNAPSHOT"; payload: KillSwitchState };
 
 /** Minimum wall-clock interval between PnL chart samples (1 second). */
 const PNL_SAMPLE_INTERVAL_MS = 1_000;
@@ -556,6 +576,24 @@ export function pipelineReducer(
         },
       };
     }
+
+    case "KILL_SWITCH":
+      // A live engage event. Latch on, preserving availability (we only ever
+      // receive these when an engine is wired, so it's available by definition).
+      return {
+        ...state,
+        killSwitch: {
+          available: true,
+          engaged: true,
+          triggered_by: action.payload.triggered_by,
+          reason: action.payload.reason,
+          ts: action.payload.ts,
+        },
+      };
+
+    case "KILL_SWITCH_SNAPSHOT":
+      // Authoritative full state from REST (mount/poll) or the reset response.
+      return { ...state, killSwitch: action.payload };
 
     default:
       return state;
