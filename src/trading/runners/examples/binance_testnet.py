@@ -1,4 +1,4 @@
-"""Run the full Binance Futures testnet pipeline with Avellaneda-Stoikov MM.
+"""Run the full Binance Futures testnet pipeline with five MM strategies.
 
 End-to-end wiring:
 - Feed handler: public WS connector (bookTicker + aggTrade streams).
@@ -9,8 +9,21 @@ End-to-end wiring:
 - :class:`ListenKeyManager` + :class:`BinanceUserDataStream` for the
   fill feedback loop.
 - :class:`BalanceReconciler` for the safety net.
-- :class:`AvellanedaStoikovStrategy` — optimal MM quoting with microprice,
-  EWMA vol, OFI tilt, and VPIN toxicity gate.
+- Five market-making strategies quoting the *same* instrument (BTC-USDT):
+  :class:`AvellanedaStoikovStrategy`, :class:`GLFTStrategy`,
+  :class:`GridStrategy`, :class:`MicropriceMMStrategy`, and
+  :class:`OBIAlphaStrategy`. They are given differentiated spreads so they
+  rest at distinct levels.
+
+Internal netting: the venue is a single futures account, so the exchange
+already nets every fill into one net position; the per-strategy books are
+attribution only. The hazard of running 5 MM strategies on one book is that
+their quotes can cross *each other* (one strategy's bid resting above
+another's ask) and wash-trade — paying fees to shuffle inventory between
+internal books for zero firm benefit. The OMS's self-trade-prevention (STP,
+enabled explicitly below) is the internal-netting guard: it holds back any
+leg that would cross a sibling strategy's live resting order. Watch for
+``self_trade_prevented`` log lines — they confirm netting is active.
 
 To run:
     python -m trading.runners.examples.binance_testnet
@@ -25,15 +38,21 @@ from __future__ import annotations
 
 import asyncio
 import signal
-import structlog
 from decimal import Decimal
 
+import structlog
+
+from trading.analytics import AnalyticsService
+from trading.config import load_settings
 from trading.core import LiveClock, StrategyId
 from trading.event_bus import AsyncioBus
 from trading.feed_handler import FeedHandler, FeedHandlerConfig
 from trading.feed_handler.normalizers import BinanceNormalizer
+from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
+from trading.oms import OMSEngine
 from trading.order_gateways.binance import (
     BalanceReconciler,
+    BinanceL2Feed,
     BinanceOrderGateway,
     BinancePublicWSConnector,
     BinanceRESTClient,
@@ -41,9 +60,8 @@ from trading.order_gateways.binance import (
     ListenKeyManager,
     StateBootstrapper,
     SymbolMapper,
+    stream_names,
 )
-from trading.order_gateways.binance import stream_names
-from trading.oms import OMSEngine
 from trading.position import AccountingMethod, EnginePortfolioView, PositionEngine
 from trading.risk import RiskEngine
 from trading.risk.rules import (
@@ -51,17 +69,23 @@ from trading.risk.rules import (
     InstrumentAllowlistRule,
     MaxOrderSizeRule,
     MaxPositionRule,
-    ThrottleRule,
 )
+from trading.runners.examples._runner_config import load_runner_config
 from trading.strategy import StrategyRegistry
 from trading.strategy.examples.avellaneda_stoikov import AvellanedaStoikovStrategy
-from trading.config import load_settings
-from trading.analytics import AnalyticsService
-from trading.order_gateways.binance import BinanceL2Feed
-from trading.monitoring import BusHeartbeat, DashboardServer, subscribe_event_logging
-from trading.runners.examples._runner_config import load_runner_config
+from trading.strategy.examples.glft import GLFTStrategy
+from trading.strategy.examples.grid import GridStrategy
+from trading.strategy.examples.microprice_mm import MicropriceMMStrategy
+from trading.strategy.examples.obi_alpha import OBIAlphaStrategy
 
-_STRATEGY_ID = StrategyId("avellaneda-stoikov")
+# Five MM strategies, all quoting the same instrument (BTC-USDT). Distinct
+# ids keep their orders, fills, and P&L attributed separately downstream.
+_AS_ID = StrategyId("as-mm")
+_GLFT_ID = StrategyId("glft-mm")
+_GRID_ID = StrategyId("grid-mm")
+_MICRO_ID = StrategyId("micro-mm")
+_OBI_ID = StrategyId("obi-mm")
+_ALL_STRATEGY_IDS = (_AS_ID, _GLFT_ID, _GRID_ID, _MICRO_ID, _OBI_ID)
 
 
 async def _amain() -> int:
@@ -93,21 +117,83 @@ async def _amain() -> int:
     risk.register_global_rules([
         InstrumentAllowlistRule(allowed_instrument_ids=["BINANCE:BTC-USDT"]),
     ])
-    risk.register_rules(_STRATEGY_ID, [
-        # Change based on whether there's stale open orders on testnet
-        # TODO: might need to build a cancel and replace order update flow to avoid this guard rejecting everything after the first few ticks
-        MaxPositionRule(max_long=Decimal("0.02"), max_short=Decimal("0.02")),
-        MaxOrderSizeRule(max_quantity=Decimal("0.01")),
-        DailyLossLimitRule(max_loss=Decimal("50")),
-    ])
-    oms = OMSEngine(bus=bus, clock=clock)
+    # Per-strategy caps for all five strategies. These rules are scoped per
+    # (strategy, instrument) — a strategy with no rules is bounded only by the
+    # global allowlist (i.e. effectively unbounded size), so registering them
+    # for every strategy is required, not optional.
+    #
+    # The position cap must fit each strategy's *per-side ladder*:
+    # MaxPositionRule sums same-side legs within one signal, so a strategy
+    # quoting N levels of `quote_size` needs a cap >= N * quote_size or its
+    # whole ladder is rejected. micro/obi/as quote one level (0.01 → 0.02 cap),
+    # glft two (0.02 → 0.02 cap), grid three (0.03 → 0.03 cap).
+    #
+    # Aggregate worst-case net = 4 × 0.02 + 0.03 = 0.11 BTC (~$7k notional) and
+    # aggregate daily-loss = 5 × $50 = $250 — acceptable on testnet. A firm-level
+    # *net* cap across strategies (RiskState is per-strategy today) is the
+    # production follow-up.
+    _MAX_POS = {
+        _MICRO_ID: Decimal("0.02"),
+        _OBI_ID: Decimal("0.02"),
+        _AS_ID: Decimal("0.02"),
+        _GLFT_ID: Decimal("0.02"),
+        _GRID_ID: Decimal("0.03"),
+    }
+    for sid in _ALL_STRATEGY_IDS:
+        cap = _MAX_POS[sid]
+        risk.register_rules(sid, [
+            MaxPositionRule(max_long=cap, max_short=cap),
+            MaxOrderSizeRule(max_quantity=Decimal("0.01")),
+            DailyLossLimitRule(max_loss=Decimal("50")),
+        ])
+    # self_trade_prevention=True is the internal-netting guard: when these five
+    # strategies quote the same book, it holds back any leg that would cross a
+    # sibling strategy's resting order, so they never wash-trade against each
+    # other. On by default; set explicitly here to make the intent visible.
+    oms = OMSEngine(bus=bus, clock=clock, self_trade_prevention=True)
 
-    # --- Strategy -----------------------------------------------------
+    # --- Strategies ---------------------------------------------------
+    # All five quote the same BTC-USDT book with *differentiated* spreads so
+    # they rest at distinct levels (tightest → widest below). The OMS's
+    # self-trade-prevention nets away any genuine cross between them. Requote
+    # gates are deliberately conservative: five strategies amending one book can
+    # otherwise hit Binance's per-order modify limit (-5026).
     portfolio = EnginePortfolioView(position)
     strategies = StrategyRegistry(bus=bus, clock=clock, portfolio=portfolio)
+
+    # Tightest — microprice-anchored, quotes near the touch.
+    strategies.register(
+        MicropriceMMStrategy(
+            strategy_id=_MICRO_ID,
+            instruments=instruments,
+            quote_size=Decimal("0.01"),
+            target_spread_bps=1.5,
+            max_position=Decimal("0.02"),
+            inventory_skew_bps=1.0,
+            min_quote_interval_s=0.5,    # requote gate: both interval AND price
+            requote_threshold_bps=0.5,   # move must trip, so keep them small or
+                                         # the strategy goes dormant in a calm book
+        ),
+    )
+    # OBI/OFI alpha-tilted, slightly wider than microprice.
+    strategies.register(
+        OBIAlphaStrategy(
+            strategy_id=_OBI_ID,
+            instruments=instruments,
+            quote_size=Decimal("0.01"),
+            target_spread_bps=2.5,
+            max_position=Decimal("0.02"),
+            inventory_skew_bps=1.0,
+            obi_alpha=0.0005,
+            ofi_alpha=0.0003,
+            ofi_window_seconds=10.0,
+            min_price_move_ticks=10,
+        ),
+    )
+    # Avellaneda-Stoikov — vol/inventory-driven spread (medium).
     strategies.register(
         AvellanedaStoikovStrategy(
-            strategy_id=_STRATEGY_ID,
+            strategy_id=_AS_ID,
             instruments=instruments,
             gamma=0.3,
             k=1.5,
@@ -126,6 +212,42 @@ async def _amain() -> int:
                                       # order stays under Binance's per-order
                                       # modify limit (-5026); also lengthens
                                       # queue position. ~20% of the half-spread.
+        ),
+    )
+    # GLFT — closed-form optimal MM, two-level ladder (wider).
+    strategies.register(
+        GLFTStrategy(
+            strategy_id=_GLFT_ID,
+            instruments=instruments,
+            gamma=0.2,
+            k=1.5,
+            A=140.0,
+            half_life_seconds=60.0,
+            ofi_window_seconds=10.0,
+            ofi_alpha=0.001,
+            quote_size=Decimal("0.01"),
+            max_position=Decimal("0.02"),
+            min_vol=0.5,
+            min_price_move_ticks=10,
+            n_levels=2,
+            grid_step_bps=4.0,
+        ),
+    )
+    # Grid — fixed-step ladder around microprice (widest).
+    strategies.register(
+        GridStrategy(
+            strategy_id=_GRID_ID,
+            instruments=instruments,
+            quote_size=Decimal("0.01"),
+            n_levels=3,
+            grid_step_bps=6.0,
+            max_position=Decimal("0.03"),  # 3 levels × 0.01 = 0.03; must match
+                                           # the MaxPositionRule cap for grid-mm
+                                           # or the whole ladder is risk-rejected
+            inventory_skew_bps=2.0,
+            use_microprice=True,
+            min_quote_interval_s=0.5,
+            requote_threshold_bps=1.0,
         ),
     )
 
@@ -262,7 +384,7 @@ async def _amain() -> int:
         await feed_handler.stop()
         try:
             await asyncio.wait_for(feed_task, timeout=5)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             pass
         await state_bootstrap.stop()
         await reconciler.stop()
