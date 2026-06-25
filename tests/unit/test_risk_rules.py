@@ -19,12 +19,15 @@ from trading.core import (
 )
 from trading.risk import RiskState
 from trading.risk.state import _NS_PER_DAY
+from trading.core.events import MicrostructureSnapshotEvent
 from trading.risk.rules import (
     DailyLossLimitRule,
+    DrawdownCircuitBreakerRule,
     InstrumentAllowlistRule,
     MaxOrderSizeRule,
     MaxPositionRule,
     ThrottleRule,
+    VPINCircuitBreakerRule,
 )
 
 
@@ -346,3 +349,168 @@ async def test_engine_keeps_leg_above_min_notional(clock, strategy_id) -> None:
     assert decisions[0].approved
     assert len(decisions[0].approved_legs) == 1
     assert decisions[0].approved_legs[0].approved_quantity == Decimal("0.01")
+
+
+# ---------------------------------------------------------------------------
+# VPINCircuitBreakerRule
+# ---------------------------------------------------------------------------
+
+def _snapshot(clock, instrument, vpin: float | None) -> MicrostructureSnapshotEvent:
+    return MicrostructureSnapshotEvent(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="test",
+        instrument=instrument,
+        bid_price=100.0, ask_price=100.1,
+        bid_size=1.0, ask_size=1.0,
+        mid_price=100.05, microprice=100.05,
+        sigma=0.01, obi=0.0, ofi=0.0,
+        vpin=vpin,
+    )
+
+
+def test_vpin_circuit_breaker_approves_when_not_warmed_up(clock, btc, strategy_id) -> None:
+    state = RiskState(clock=clock)
+    rule = VPINCircuitBreakerRule(threshold=0.8, sustained_ticks=3)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert result.approved
+
+
+def test_vpin_circuit_breaker_approves_below_threshold(clock, btc, strategy_id) -> None:
+    state = RiskState(clock=clock)
+    state.apply_analytics_snapshot(_snapshot(clock, btc, vpin=0.5))
+    rule = VPINCircuitBreakerRule(threshold=0.8, sustained_ticks=3)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert result.approved
+
+
+def test_vpin_circuit_breaker_blocks_first_breach_tick(clock, btc, strategy_id) -> None:
+    """First tick above threshold: BLOCK (not KILL) — one spike must not halt."""
+    state = RiskState(clock=clock)
+    state.apply_analytics_snapshot(_snapshot(clock, btc, vpin=0.85))
+    rule = VPINCircuitBreakerRule(threshold=0.8, sustained_ticks=3)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert not result.approved
+    assert result.severity is Severity.BLOCK
+
+
+def test_vpin_circuit_breaker_blocks_partial_sustained_breach(clock, btc, strategy_id) -> None:
+    """Two ticks above threshold when sustained_ticks=3: still BLOCK, not KILL."""
+    state = RiskState(clock=clock)
+    state.apply_analytics_snapshot(_snapshot(clock, btc, vpin=0.85))
+    state.apply_analytics_snapshot(_snapshot(clock, btc, vpin=0.85))
+    rule = VPINCircuitBreakerRule(threshold=0.8, sustained_ticks=3)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert not result.approved
+    assert result.severity is Severity.BLOCK
+
+
+def test_vpin_circuit_breaker_kills_after_sustained_breach(clock, btc, strategy_id) -> None:
+    """After sustained_ticks consecutive ticks above threshold, severity escalates to KILL."""
+    state = RiskState(clock=clock)
+    for _ in range(3):
+        state.apply_analytics_snapshot(_snapshot(clock, btc, vpin=0.85))
+    rule = VPINCircuitBreakerRule(threshold=0.8, sustained_ticks=3)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert not result.approved
+    assert result.severity is Severity.KILL
+
+
+def test_vpin_circuit_breaker_resets_on_clear(clock, btc, strategy_id) -> None:
+    """Breach counter resets to zero once VPIN drops below threshold."""
+    state = RiskState(clock=clock)
+    for _ in range(3):
+        state.apply_analytics_snapshot(_snapshot(clock, btc, vpin=0.85))
+    state.apply_analytics_snapshot(_snapshot(clock, btc, vpin=0.5))  # clear
+    rule = VPINCircuitBreakerRule(threshold=0.8, sustained_ticks=3)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert result.approved
+
+
+# ---------------------------------------------------------------------------
+# DrawdownCircuitBreakerRule
+# ---------------------------------------------------------------------------
+
+def _position_update(clock, btc, strategy_id, realized, unrealized):
+    """Helper: build a PositionUpdateEvent with given PnL values."""
+    from trading.core import PositionUpdateEvent
+    from decimal import Decimal
+    return PositionUpdateEvent(
+        ts_event=clock.now_ns(),
+        ts_ingest=clock.now_ns(),
+        source="test",
+        strategy_id=strategy_id,
+        instrument=btc,
+        quantity=Decimal(0),
+        average_entry_price=Decimal(0),
+        realized_pnl=Decimal(str(realized)),
+        unrealized_pnl=Decimal(str(unrealized)),
+        mark_price=Decimal("50000"),
+    )
+
+
+def test_drawdown_approves_cold_start(clock, btc, strategy_id) -> None:
+    """No position data yet — approve (cold start safe)."""
+    state = RiskState(clock=clock)
+    rule = DrawdownCircuitBreakerRule(warn_pct=0.10, kill_pct=0.20)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert result.approved
+
+
+def test_drawdown_approves_below_warn(clock, btc, strategy_id) -> None:
+    """Small loss well below warn threshold — approve."""
+    state = RiskState(clock=clock)
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, 0))
+    # 4% drawdown: current drops to $960
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, -40))
+    rule = DrawdownCircuitBreakerRule(warn_pct=0.10, kill_pct=0.20)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert result.approved
+
+
+def test_drawdown_warns_between_thresholds(clock, btc, strategy_id) -> None:
+    """Drawdown between warn and kill → WARN severity (blocks signal, emits alert)."""
+    state = RiskState(clock=clock)
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, 0))
+    # 15% drawdown: current = $850
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, -150))
+    rule = DrawdownCircuitBreakerRule(warn_pct=0.10, kill_pct=0.20)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert not result.approved
+    assert result.severity is Severity.WARN
+
+
+def test_drawdown_kills_above_kill_pct(clock, btc, strategy_id) -> None:
+    """Drawdown exceeds kill threshold → KILL severity."""
+    state = RiskState(clock=clock)
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, 0))
+    # 25% drawdown: current = $750
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, -250))
+    rule = DrawdownCircuitBreakerRule(warn_pct=0.10, kill_pct=0.20)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert not result.approved
+    assert result.severity is Severity.KILL
+
+
+def test_drawdown_resets_on_recovery(clock, btc, strategy_id) -> None:
+    """When equity recovers to a new peak, drawdown resets and rule approves."""
+    state = RiskState(clock=clock)
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, 0))
+    # Suffer 15% drawdown
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1000, -150))
+    # Recover to a new high
+    state.apply_position_update(_position_update(clock, btc, strategy_id, 1200, 0))
+    rule = DrawdownCircuitBreakerRule(warn_pct=0.10, kill_pct=0.20)
+    sig = _signal(clock, btc, strategy_id)
+    result = rule.evaluate(sig, sig.legs[0], state)
+    assert result.approved

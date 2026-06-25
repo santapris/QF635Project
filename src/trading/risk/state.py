@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from ..core.clock import Clock
-from ..core.events import FillEvent, OpenOrdersSnapshotEvent, PositionUpdateEvent
+from ..core.events import FillEvent, MicrostructureSnapshotEvent, OpenOrdersSnapshotEvent, PositionUpdateEvent
 from ..core.instruments import Instrument
 from ..core.types import Price, Quantity, StrategyId, Timestamp
 
@@ -35,7 +35,6 @@ _NS_PER_DAY = 86_400_000_000_000
 @dataclass(slots=True)
 class _StrategyDailyPnL:
     """Day-bucketed realized PnL for one strategy.
-
     The position engine reports *cumulative* (lifetime) realized PnL. To get
     "today's" PnL we subtract the cumulative value captured at the start of the
     current UTC day (``baseline_pnl``) from the latest cumulative value
@@ -44,9 +43,11 @@ class _StrategyDailyPnL:
     resets each day without needing an external scheduler.
     """
 
-    cumulative_pnl: Price = Decimal(0)
     baseline_pnl: Price = Decimal(0)
     day_index: int = -1
+    realized_pnl: Price = Decimal(0)
+    day_start_ns: Timestamp = 0
+    _last_unrealized_pnl: Price = Decimal(0)  # latest unrealized from position engine
 
 
 class RiskState:
@@ -63,6 +64,15 @@ class RiskState:
         self._daily_pnl: dict[StrategyId, _StrategyDailyPnL] = {}
         # One sliding window of recent signal timestamps per strategy.
         self._recent_signals: dict[StrategyId, deque[Timestamp]] = defaultdict(deque)
+        # Latest VPIN value per instrument_id (not per strategy — VPIN is market-wide).
+        self._vpin: dict[str, float] = {}
+        # Consecutive ticks each instrument has had VPIN above a given threshold.
+        # Keyed by (instrument_id, threshold_str) to support multiple rules with
+        # different thresholds. Updated by apply_analytics_snapshot.
+        self._vpin_breach_ticks: dict[tuple[str, str], int] = {}
+        # Session-high total equity (realized + unrealized) per strategy.
+        # Used by DrawdownCircuitBreakerRule to compute drawdown from peak.
+        self._session_peak_equity: dict[StrategyId, Decimal] = {}
 
     # --- Read API (used by rules) -----------------------------------------
 
@@ -109,6 +119,41 @@ class RiskState:
         # doesn't keep the kill switch armed past midnight UTC.
         self._maybe_rollover(bucket)
         return bucket.cumulative_pnl - bucket.baseline_pnl
+
+    def get_drawdown_pct(self, strategy_id: StrategyId) -> float | None:
+        """Current drawdown from session-peak equity as a fraction (0.10 = 10%).
+
+        Computed from realized + unrealized PnL vs. the highest total equity seen
+        in this session. Returns None until the first PositionUpdateEvent arrives.
+        """
+        bucket = self._daily_pnl.get(strategy_id)
+        peak = self._session_peak_equity.get(strategy_id)
+        if bucket is None or peak is None:
+            return None
+        # Approximate unrealized from last position update stored in bucket.
+        current = bucket.realized_pnl + bucket._last_unrealized_pnl
+        if peak <= 0:
+            return None
+        dd = float((peak - current) / abs(peak))
+        return max(0.0, dd)
+
+    def get_vpin(self, strategy_id: StrategyId, instrument_id: str) -> float | None:
+        """Latest VPIN value for an instrument. None if not yet warmed up.
+
+        VPIN is market-wide (not per-strategy), keyed only on instrument.
+        The strategy_id parameter is unused but kept for API consistency.
+        """
+        return self._vpin.get(instrument_id)
+
+    def get_vpin_breach_ticks(
+        self, strategy_id: StrategyId, instrument_id: str, threshold: float = 0.8
+    ) -> int:
+        """Consecutive ticks instrument has had VPIN >= threshold.
+
+        Returns 0 if VPIN has never breached or last tick was below threshold.
+        """
+        key = (instrument_id, str(threshold))
+        return self._vpin_breach_ticks.get(key, 0)
 
     def signals_in_window(
         self, strategy_id: StrategyId, *, window_seconds: float | None = None
@@ -161,20 +206,31 @@ class RiskState:
         key = (update.strategy_id, update.instrument.instrument_id)
         self._positions[key] = update.quantity
 
-        bucket = self._daily_pnl.get(update.strategy_id)
+        sid = update.strategy_id
+        bucket = self._daily_pnl.get(sid)
         if bucket is None:
             # First sight of this strategy: treat today's PnL as the full
             # cumulative value (baseline 0), matching a flat day start.
-            self._daily_pnl[update.strategy_id] = _StrategyDailyPnL(
-                cumulative_pnl=update.realized_pnl,
+            bucket = _StrategyDailyPnL(
+                realized_pnl=update.realized_pnl,
                 baseline_pnl=Decimal(0),
                 day_index=self._day_index(),
+                day_start_ns=self._clock.now_ns(),
+                _last_unrealized_pnl=update.unrealized_pnl,
             )
+            self._daily_pnl[sid] = bucket
         else:
             # Roll over *before* recording the new value so the baseline
             # captures yesterday's ending cumulative PnL, not today's.
             self._maybe_rollover(bucket)
-            bucket.cumulative_pnl = update.realized_pnl
+
+            bucket.realized_pnl = update.realized_pnl
+            bucket._last_unrealized_pnl = update.unrealized_pnl
+
+        # Track session-peak equity for drawdown measurement.
+        total_equity = update.realized_pnl + update.unrealized_pnl
+        prev_peak = self._session_peak_equity.get(sid, total_equity)
+        self._session_peak_equity[sid] = max(prev_peak, total_equity)
 
     def apply_open_orders_snapshot(self, snapshot: OpenOrdersSnapshotEvent) -> None:
         """Replace working-order exposure from the OMS's snapshot.
@@ -195,6 +251,28 @@ class RiskState:
             (e.strategy_id, e.instrument.instrument_id): (e.working_buy, e.working_sell)
             for e in snapshot.exposures
         }
+
+    def apply_analytics_snapshot(self, snapshot: MicrostructureSnapshotEvent) -> None:
+        """Update cached VPIN and breach-tick counters from a microstructure event.
+
+        Called by the engine on every MicrostructureSnapshotEvent. Updates the
+        per-instrument VPIN value and increments or resets the breach counter
+        for each threshold a rule might query. Currently tracks thresholds seen
+        in breach queries; pre-populates common thresholds to avoid cold-start.
+        """
+        instrument_id = snapshot.instrument.instrument_id
+        vpin = snapshot.vpin
+        if vpin is None:
+            return
+        self._vpin[instrument_id] = vpin
+
+        # Update breach counters for common thresholds.
+        for threshold in (0.5, 0.7, 0.8, 0.9):
+            key = (instrument_id, str(float(threshold)))
+            if vpin >= threshold:
+                self._vpin_breach_ticks[key] = self._vpin_breach_ticks.get(key, 0) + 1
+            else:
+                self._vpin_breach_ticks[key] = 0
 
     def start_new_session(self) -> None:
         """Force a day-bucket rollover for every strategy.
@@ -220,6 +298,7 @@ class RiskState:
         if bucket.day_index != today_idx:
             bucket.baseline_pnl = bucket.cumulative_pnl
             bucket.day_index = today_idx
+        self._session_peak_equity.clear()  # new session = fresh drawdown baseline
 
 
 __all__ = ["RiskState"]

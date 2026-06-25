@@ -22,6 +22,7 @@ const POSITIONS_INTERVAL_MS   = 2_000;
 const ACCOUNT_INTERVAL_MS     = 5_000;
 const OPEN_ORDERS_INTERVAL_MS = 2_000;
 const ANALYTICS_INTERVAL_MS   = 500;
+const LATENCY_INTERVAL_MS     = 1_000;
 
 interface PositionsResponse {
   timestamp: string;
@@ -90,6 +91,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
     let accountTimer:    ReturnType<typeof setTimeout> | null = null;
     let openOrdersTimer: ReturnType<typeof setTimeout> | null = null;
     let analyticsTimer:  ReturnType<typeof setTimeout> | null = null;
+    let latencyTimer:    ReturnType<typeof setTimeout> | null = null;
 
     const tickPositions = async () => {
       const data = await fetchJSON<PositionsResponse>("/state/positions", ctrl.signal);
@@ -234,11 +236,25 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       }
     };
 
+    const tickLatency = async () => {
+      const data = await fetchJSON<{
+        timestamp: string;
+        stages: Record<string, { p50_ms: number | null; p95_ms: number | null; p99_ms: number | null; count: number } | undefined>;
+      }>("/state/latency", ctrl.signal);
+      if (data && !ctrl.signal.aborted) {
+        dispatch({ type: "LATENCY_SNAPSHOT", payload: { ts: Date.parse(data.timestamp) || Date.now(), stages: data.stages } });
+      }
+      if (!ctrl.signal.aborted) {
+        latencyTimer = setTimeout(tickLatency, LATENCY_INTERVAL_MS);
+      }
+    };
+
     // Kick all polls immediately so the panels populate on first paint.
     tickPositions();
     tickAccount();
     tickOpenOrders();
     tickAnalytics();
+    tickLatency();
 
     return () => {
       ctrl.abort();
@@ -246,6 +262,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       if (accountTimer)    clearTimeout(accountTimer);
       if (openOrdersTimer) clearTimeout(openOrdersTimer);
       if (analyticsTimer)  clearTimeout(analyticsTimer);
+      if (latencyTimer)    clearTimeout(latencyTimer);
     };
   }, [dispatch]);
 }

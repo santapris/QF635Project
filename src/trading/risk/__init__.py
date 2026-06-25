@@ -1,4 +1,4 @@
-"""Risk engine: pre-trade rules, kill switch, state of the world."""
+"""Risk engineL: pre-trade rules, kill switch"""
 
 from .base import AbstractRiskRule, RuleResult
 from .engine import RiskEngine

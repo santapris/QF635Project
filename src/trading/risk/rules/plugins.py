@@ -13,7 +13,7 @@ from .max_notional import MaxNotionalRule
 from .max_order_size import MaxOrderSizeRule
 from .max_position import MaxPositionRule
 from .throttle import ThrottleRule
-
+from .vpin_circuit_breaker import VPINCircuitBreakerRule
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -40,6 +40,9 @@ class ThrottleParams(_Strict):
 class DailyLossLimitParams(_Strict):
     max_loss: Decimal
 
+class VPINCircuitBreakerParams(_Strict):
+    vpin_threshold: float = 0.8
+    sustained_ticks: int = 5
 
 class InstrumentAllowlistParams(_Strict):
     # Accept comma-separated string (legacy TOML) or list.
@@ -84,6 +87,15 @@ class _DailyLossLimitPlugin:
         return DailyLossLimitRule(max_loss=params.max_loss)
 
 
+class _VPINCircuitBreakerPlugin:
+    Params = VPINCircuitBreakerParams
+
+    def build(self, params: VPINCircuitBreakerParams):
+        return VPINCircuitBreakerRule(
+            threshold=params.vpin_threshold,
+            sustained_ticks=params.sustained_ticks,
+        )
+
 class _InstrumentAllowlistPlugin:
     Params = InstrumentAllowlistParams
 
@@ -101,6 +113,7 @@ def register() -> None:
     rule_registry.register("throttle", _ThrottlePlugin())
     rule_registry.register("daily_loss_limit", _DailyLossLimitPlugin())
     rule_registry.register("instrument_allowlist", _InstrumentAllowlistPlugin())
+    rule_registry.register("vpin_circuit_breaker", _VPINCircuitBreakerPlugin())
 
 
 register()

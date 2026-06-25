@@ -239,6 +239,16 @@ function parseMessage(raw: string): PipelineAction | null {
       };
     }
 
+    case "backtest":
+      return {
+        type: "BACKTEST_RESULT",
+        payload: {
+          status: String(data.status ?? "error") as import("../store/pipelineStore").BacktestStatus,
+          result: (data.result as import("../store/pipelineStore").BacktestResult) ?? null,
+          error: data.error != null ? String(data.error) : null,
+        },
+      };
+
     default:
       return null;
   }

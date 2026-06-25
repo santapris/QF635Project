@@ -53,6 +53,7 @@ from ..core.events import (
     BaseEvent,
     FillEvent,
     KillSwitchEvent,
+    MicrostructureSnapshotEvent,
     OpenOrdersSnapshotEvent,
     PositionUpdateEvent,
     RejectedLeg,
@@ -126,7 +127,7 @@ class RiskEngine:
         await self._bus.subscribe(Topic.FILLS, self._on_fill)
         await self._bus.subscribe(Topic.POSITIONS, self._on_position_update)
         await self._bus.subscribe(Topic.OPEN_ORDERS, self._on_open_orders)
-
+        await self._bus.subscribe(Topic.ANALYTICS, self._on_analytics)
     async def stop(self) -> None:
         self._started = False
 
@@ -220,11 +221,13 @@ class RiskEngine:
                 ))
                 continue
 
-            # Apply tightest clamp for this leg.
+            # Apply tightest clamp for this leg, collect reason from binding rule
             qty = leg.quantity
+            clamp_reason = ""
             for r in results:
                 if r.approved_quantity is not None and r.approved_quantity < qty:
                     qty = Quantity(r.approved_quantity)
+                    clamp_reason = r.reason # reason from the tightest clamping rule
 
             # Min-notional backstop. A clamp (e.g. MaxPosition trimming a buy to
             # fit remaining headroom) can drive the final size below the venue's
@@ -264,6 +267,7 @@ class RiskEngine:
 
             approved.append(ApprovedLeg(
                 leg_id=leg.leg_id, side=leg.side, approved_quantity=qty,
+                clamp_reason=clamp_reason,
             ))
 
         # Verdict assembly.
@@ -313,6 +317,10 @@ class RiskEngine:
     async def _on_open_orders(self, event: BaseEvent) -> None:
         if isinstance(event, OpenOrdersSnapshotEvent):
             self._state.apply_open_orders_snapshot(event)
+
+    async def _on_analytics(self, event: BaseEvent) -> None:
+        if isinstance(event, MicrostructureSnapshotEvent):
+            self._state.apply_analytics_snapshot(event)
 
     # --- Helpers ----------------------------------------------------------
 

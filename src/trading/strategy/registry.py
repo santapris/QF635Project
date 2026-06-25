@@ -92,6 +92,10 @@ class StrategyRegistry:
         self._parameters: dict[StrategyId, dict[str, Any]] = {}
         self._loggers: dict[StrategyId, structlog.BoundLogger] = {}
         self._started = False
+        # Side-channel for tick→signal latency: signal.event_id → tick.ts_ingest.
+        # Bounded to prevent growth if strategies emit signals faster than they're consumed.
+        self._signal_tick_map: dict = {}
+        self._SIGNAL_MAP_MAX = 128
 
     # --- Registration ------------------------------------------------------
 
@@ -131,6 +135,11 @@ class StrategyRegistry:
     @property
     def strategy_ids(self) -> list[StrategyId]:
         return list(self._strategies)
+
+    @property
+    def signal_tick_map(self) -> dict:
+        """Shared reference used by LatencyCollector for tick→signal timing."""
+        return self._signal_tick_map
 
     # --- Lifecycle ---------------------------------------------------------
 
@@ -224,6 +233,10 @@ class StrategyRegistry:
             )
             return
         for signal in signals or ():
+            # Bounded insert for tick→signal latency tracking (zero model-copy overhead).
+            if len(self._signal_tick_map) >= self._SIGNAL_MAP_MAX:
+                self._signal_tick_map.pop(next(iter(self._signal_tick_map)))
+            self._signal_tick_map[signal.event_id] = event.ts_ingest
             await self._bus.publish(Topic.SIGNALS, signal)
 
         if isinstance(event, TickEvent):

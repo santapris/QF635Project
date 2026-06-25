@@ -77,6 +77,11 @@ from trading.strategy.examples.glft import GLFTStrategy
 from trading.strategy.examples.grid import GridStrategy
 from trading.strategy.examples.microprice_mm import MicropriceMMStrategy
 from trading.strategy.examples.obi_alpha import OBIAlphaStrategy
+from trading.config import load_settings
+from trading.analytics import AnalyticsService
+from trading.order_gateways.binance import BinanceL2Feed
+from trading.monitoring import BusHeartbeat, DashboardServer, LatencyCollector, subscribe_event_logging
+from trading.runners.examples._runner_config import load_runner_config
 
 # Five MM strategies, all quoting the same instrument (BTC-USDT). Distinct
 # ids keep their orders, fills, and P&L attributed separately downstream.
@@ -301,12 +306,20 @@ async def _amain() -> int:
         oms=oms, symbols=symbols, tracked_instruments=instruments,
     )
 
+    # --- Latency collector --------------------------------------------
+    latency_collector = LatencyCollector(
+        bus=bus,
+        signal_tick_map=strategies.signal_tick_map,
+        window=200,
+    )
+
     # --- Dashboard ----------------------------------------------------
     # Pass position_engine so the REST /state/positions endpoint can read
     # live state directly from the engine (no event-bus replay needed).
     dashboard = (
         DashboardServer(
             bus=bus, port=settings.dashboard_port, position_engine=position,
+            latency_collector=latency_collector,
         )
         if settings.dashboard_port > 0
         else None
@@ -339,6 +352,7 @@ async def _amain() -> int:
     await analytics_service.start()
     await l2_feed.start()
     await heartbeat.start()
+    await latency_collector.start()
     # Dashboard must start before reconciler so it subscribes to Topic.ACCOUNT
     # before the reconciler's first reconcile_once() publishes a snapshot.
     if dashboard is not None:
@@ -377,6 +391,7 @@ async def _amain() -> int:
     finally:
         log.info("stopping_binance_testnet_pipeline")
         await heartbeat.stop()
+        await latency_collector.stop()
         if dashboard is not None:
             await dashboard.stop()
         await analytics_service.stop()
