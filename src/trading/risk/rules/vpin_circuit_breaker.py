@@ -94,5 +94,6 @@ class VPINCircuitBreakerRule(AbstractRiskRule):
             )
         
         return RuleResult.approve(self.name, "VPIN below threshold. Quoting continues.")
-    
-    __all__ = ["VPINCircuitBreakerRule"]
+
+
+__all__ = ["VPINCircuitBreakerRule"]

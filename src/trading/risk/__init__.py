@@ -6,10 +6,10 @@ from .kill_switch import KillSwitch, KillSwitchState
 from .state import RiskState
 
 __all__ = [
-    "AbstractRiskRule", 
-    "KillSwitch", 
-    "KillSwitchState", 
-    "RiskEngine", 
+    "AbstractRiskRule",
+    "KillSwitch",
+    "KillSwitchState",
+    "RiskEngine",
     "RiskState",
     "RuleResult",
 ]

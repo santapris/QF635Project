@@ -92,7 +92,7 @@ class _VPINCircuitBreakerPlugin:
 
     def build(self, params: VPINCircuitBreakerParams):
         return VPINCircuitBreakerRule(
-            vpin_threshold=params.vpin_threshold,
+            threshold=params.vpin_threshold,
             sustained_ticks=params.sustained_ticks,
         )
 

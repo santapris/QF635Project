@@ -30,7 +30,6 @@ enabled = true
 [strategies.parameters]
 fast_period = "5"
 slow_period = "15"
-target_quantity = "0.1"
 
 # Risk: cap absolute position, throttle to a sane rate, stop on a big drawdown.
 [[risk.global_rules]]

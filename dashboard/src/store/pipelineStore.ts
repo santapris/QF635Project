@@ -220,6 +220,48 @@ export interface AnalyticsPoint {
   vpin_widened: boolean;
 }
 
+export interface BacktestMetrics {
+  total_return: number;
+  annualized_return: number;
+  annualized_volatility: number;
+  sharpe_ratio: number;
+  sortino_ratio: number;
+  max_drawdown: number;
+  max_drawdown_pct: number;
+  num_trades: number;
+  win_rate: number;
+  profit_factor: number;
+}
+
+export interface BacktestResult {
+  config_path: string;
+  num_fills: number;
+  num_equity_points: number;
+  first_fill_ts: number | null;
+  last_fill_ts: number | null;
+  metrics: BacktestMetrics | null;
+  equity_curve: [number, number][]; // [ts_ns, total_pnl]
+}
+
+export interface BacktestConfigOption {
+  name: string;
+  path: string;
+}
+
+export type BacktestStatus = "idle" | "running" | "complete" | "error";
+
+export interface BacktestState {
+  status: BacktestStatus;
+  result: BacktestResult | null;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+const _BACKTEST_INITIAL: BacktestState = {
+  status: "idle", result: null, error: null, started_at: null, completed_at: null,
+};
+
 export interface StageLatencyData {
   p50_ms: number | null;
   p95_ms: number | null;
@@ -256,6 +298,7 @@ export interface PipelineState {
   analytics: AnalyticsSnapshot | null;      // latest analytics snapshot (for gauges)
   analyticsHistory: AnalyticsPoint[];       // rolling 300, 250ms-sampled (for charts)
   _lastAnalyticsSampleMs: number;           // wall-clock ms of last analyticsHistory sample
+  backtest: BacktestState;                  // event-driven pair backtest run state
   latency: LatencySnapshot | null;          // latest pipeline latency percentiles
 }
 
@@ -280,6 +323,7 @@ export const initialState: PipelineState = {
   analytics: null,
   analyticsHistory: [],
   _lastAnalyticsSampleMs: 0,
+  backtest: _BACKTEST_INITIAL,
   latency: null,
 };
 
@@ -299,6 +343,7 @@ export type PipelineAction =
   | { type: "LOGS_BATCH"; payload: LogRow[] }
   | { type: "CLEAR_LOGS" }
   | { type: "ANALYTICS"; payload: AnalyticsSnapshot }
+  | { type: "BACKTEST_RESULT"; payload: { status: BacktestStatus; result: BacktestResult | null; error: string | null } }
   | { type: "LATENCY_SNAPSHOT"; payload: { ts: number; stages: Record<string, StageLatencyData | undefined> } };
 
 /** Minimum wall-clock interval between PnL chart samples (1 second). */
@@ -485,6 +530,18 @@ export function pipelineReducer(
         _lastAnalyticsSampleMs: shouldSample ? nowMs : state._lastAnalyticsSampleMs,
       };
     }
+
+    case "BACKTEST_RESULT":
+      return {
+        ...state,
+        backtest: {
+          ...state.backtest,
+          status: action.payload.status,
+          result: action.payload.result,
+          error: action.payload.error,
+          completed_at: new Date().toISOString(),
+        },
+      };
 
     case "LATENCY_SNAPSHOT": {
       const { ts, stages } = action.payload;
