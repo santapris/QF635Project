@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 import signal
 import structlog
 import sys
@@ -92,6 +93,10 @@ async def _amain(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     args = _parse_args(argv if argv is not None else sys.argv[1:], settings)
+    # collect all startup grabage and freeze current live objects so subsquent GC cycles will not visit them 
+    # Short lived objects (event snapshots while trading) handled by CPython's reference counting eliminating GC pauses that show up in the tail latency
+    gc.collect()
+    gc.freeze()
     return asyncio.run(_amain(args))
 
 

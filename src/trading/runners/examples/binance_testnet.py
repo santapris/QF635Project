@@ -37,6 +37,7 @@ before running longer.
 from __future__ import annotations
 
 import asyncio
+import gc
 import signal
 from decimal import Decimal
 
@@ -417,6 +418,8 @@ async def _amain() -> int:
 
 
 def main() -> int:
+    gc.collect()
+    gc.freeze()
     return asyncio.run(_amain())
 
 

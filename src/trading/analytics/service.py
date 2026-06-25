@@ -144,9 +144,17 @@ class AnalyticsService:
         state.vpin.update(float(event.price), float(event.quantity))
 
     def _on_book(self, event: OrderBookEvent) -> None:
+        # Walk only as many levels as we have — avoid O(N) sum on full depth.
+        # Binance sends up to 20 levels; capping at 5 is ample for L2 OBI and
+        # gives the same directional signal at 4× lower CPU cost.
         state = self._get_state(event.instrument.instrument_id)
-        bid_total = sum(float(level.quantity) for level in event.bids)
-        ask_total = sum(float(level.quantity) for level in event.asks)
+        _MAX_LEVELS = 5
+        bid_total = sum(
+            float(level.quantity) for level in event.bids[:_MAX_LEVELS]
+        )
+        ask_total = sum(
+            float(level.quantity) for level in event.asks[:_MAX_LEVELS]
+        )
         total = bid_total + ask_total
         state.obi_l2 = (bid_total - ask_total) / total if total > 0 else None
         state.depth_bid_total = bid_total

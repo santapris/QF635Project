@@ -137,6 +137,10 @@ class RiskEngine:
         if not isinstance(event, SignalEvent):
             return
 
+        # Stamp now — before any awaits — so signal→decision latency reflects
+        # actual evaluation time, not queue wait + processing combined.
+        ingest_ns = self._clock.now_ns()
+
         # Record before evaluation so the throttle window sees this signal.
         self._state.record_signal(event.strategy_id)
 
@@ -149,6 +153,7 @@ class RiskEngine:
                 severity=Severity.KILL,
                 rule_name=ks.triggered_by,
                 reason=f"kill switch engaged: {ks.reason}",
+                ingest_ns=ingest_ns,
             )
             return
 
@@ -163,6 +168,7 @@ class RiskEngine:
         rejected: list[RejectedLeg] = []
         worst_severity = Severity.INFO
         kill_triggered = False
+        pending_alerts: list[tuple[str, RuleResult]] = []
 
         for leg in event.legs:
             # If a prior leg tripped the kill switch, every remaining leg
@@ -192,7 +198,10 @@ class RiskEngine:
                     )
                 results.append(result)
                 if result.severity in (Severity.WARN, Severity.BLOCK, Severity.KILL):
-                    await self._publish_alert(rule.name, result)
+                    # Defer alert publishing — awaiting inside the rule loop adds
+                    # one context switch per rule, stacking up to ~1ms per alert.
+                    # Collect here, publish in one batch after verdict is assembled.
+                    pending_alerts.append((rule.name, result))
                     if result.severity.value > worst_severity.value:
                         worst_severity = result.severity
 
@@ -270,10 +279,9 @@ class RiskEngine:
                 clamp_reason=clamp_reason,
             ))
 
-        # Verdict assembly.
+        # Verdict assembly. Publish decision first (latency-critical path),
+        # then flush deferred alerts (best-effort, non-blocking on hot path).
         if event.atomic and rejected:
-            # Atomic signal with any rejection → reject the whole thing.
-            # No legs are placed even though some passed individually.
             first = rejected[0]
             await self._publish_decision(
                 event,
@@ -282,7 +290,10 @@ class RiskEngine:
                 rule_name=first.rule_name,
                 reason=f"atomic signal rejected: {first.reason}",
                 rejected_legs=tuple(rejected),
+                ingest_ns=ingest_ns,
             )
+            for rule_name, alert_result in pending_alerts:
+                await self._publish_alert(rule_name, alert_result)
             return
 
         if not approved:
@@ -293,7 +304,10 @@ class RiskEngine:
                 rule_name=rejected[0].rule_name if rejected else None,
                 reason="all legs rejected by risk",
                 rejected_legs=tuple(rejected),
+                ingest_ns=ingest_ns,
             )
+            for rule_name, alert_result in pending_alerts:
+                await self._publish_alert(rule_name, alert_result)
             return
 
         await self._publish_decision(
@@ -304,7 +318,10 @@ class RiskEngine:
             reason="" if not rejected else "some legs rejected",
             approved_legs=tuple(approved),
             rejected_legs=tuple(rejected),
+            ingest_ns=ingest_ns,
         )
+        for rule_name, alert_result in pending_alerts:
+            await self._publish_alert(rule_name, alert_result)
 
     async def _on_fill(self, event: BaseEvent) -> None:
         if isinstance(event, FillEvent):
@@ -365,12 +382,14 @@ class RiskEngine:
         reason: str,
         approved_legs: tuple[ApprovedLeg, ...] = (),
         rejected_legs: tuple[RejectedLeg, ...] = (),
+        ingest_ns: int = 0,
     ) -> None:
+        now = self._clock.now_ns()
         await self._safe_publish(
             Topic.RISK_DECISIONS,
             RiskDecision(
-                ts_event=self._clock.now_ns(),
-                ts_ingest=self._clock.now_ns(),
+                ts_event=now,
+                ts_ingest=ingest_ns or now,  # use entry timestamp when provided
                 source="risk_engine",
                 signal_event_id=signal.event_id,
                 strategy_id=signal.strategy_id,

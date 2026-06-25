@@ -291,26 +291,28 @@ class AvellanedaStoikovStrategy(AbstractStrategy):
             ask_quote = float(ask_price)
         else:
             self._last_ask = None
-
-        ctx.logger.debug(
-            "as_tick",
-            micro=round(micro, 4),
-            arith_mid=round((bid + ask) / 2, 4),
-            sigma_ann=round(sigma_ann, 4),
-            sigma_abs=round(sigma, 8),
-            ofi=round(ofi_val, 4),
-            obi=round(obi_val or 0.0, 4),
-            vpin=round(vpin_val, 4) if vpin_val is not None else None,
-            vpin_widened=vpin_widened,
-            reservation=round(reservation, 4),
-            half_spread=round(half_spread, 4),
-            bid_quote=bid_quote,
-            ask_quote=ask_quote,
-            inventory=round(inventory, 6),
-            buy_guard=buy_guard,
-            sell_guard=sell_guard,
-            n_legs=len(legs),
-        )
+        # perf improvement sample every 10th to avooid structlog serialization overhead on hotpath
+        self._tick_count = getattr(self, "_tick_count", 0) + 1
+        if self._tick_count % 10 == 0: 
+            ctx.logger.debug(
+                "as_tick",
+                micro=round(micro, 4),
+                arith_mid=round((bid + ask) / 2, 4),
+                sigma_ann=round(sigma_ann, 4),
+                sigma_abs=round(sigma, 8),
+                ofi=round(ofi_val, 4),
+                obi=round(obi_val or 0.0, 4),
+                vpin=round(vpin_val, 4) if vpin_val is not None else None,
+                vpin_widened=vpin_widened,
+                reservation=round(reservation, 4),
+                half_spread=round(half_spread, 4),
+                bid_quote=bid_quote,
+                ask_quote=ask_quote,
+                inventory=round(inventory, 6),
+                buy_guard=buy_guard,
+                sell_guard=sell_guard,
+                n_legs=len(legs),
+            )
 
         self._latest_diagnostics = {
             "ts_event": event.ts_event,
