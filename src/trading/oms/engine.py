@@ -89,6 +89,18 @@ _log = structlog.get_logger(__name__)
 
 _NS_PER_SECOND = 1_000_000_000
 
+# Statuses for which a sibling order is (or is about to be) resting on the
+# venue and could therefore be self-traded. PENDING_CANCEL is excluded — that
+# order is on its way off the book — and terminal states obviously can't fill.
+# A PENDING_AMEND order is still live at its current price until the amend
+# confirms, so it counts.
+_STP_LIVE_STATUSES = (
+    OrderStatus.PENDING_NEW,
+    OrderStatus.ACKNOWLEDGED,
+    OrderStatus.PARTIALLY_FILLED,
+    OrderStatus.PENDING_AMEND,
+)
+
 # Reserved strategy id for orders/positions adopted from the venue that we
 # cannot attribute to a known strategy (placed by a human, another system, or
 # whose client_order_id doesn't match our minting scheme). External orders are
@@ -123,12 +135,23 @@ class OMSEngine:
         signal_ttl_seconds: float = 300.0,
         algo_driver_interval_seconds: float = 0.1,
         pending_amend_timeout_seconds: float = 5.0,
+        self_trade_prevention: bool = True,
     ) -> None:
         self._bus = bus
         self._clock = clock
         self._router = router or DefaultExecutionRouter()
         self._source = source
         self._signal_ttl_ns = int(signal_ttl_seconds * _NS_PER_SECOND)
+        # Internal netting / self-trade prevention. The OMS holds every
+        # strategy's orders in one map, so it is the single place that can see a
+        # would-be cross between two strategies on the same instrument. When on,
+        # a leg that would lift/hit a *sibling* strategy's resting order is held
+        # back this tick rather than routed to the venue — the firm never trades
+        # with itself (no wasted fees/spread, no wash trade). Per-strategy P&L
+        # attribution is untouched: we suppress the cross, we don't re-attribute
+        # a fill. See _crosses_other_strategy and _reconcile_immediate.
+        self._stp_enabled = self_trade_prevention
+        self._self_trade_prevented: int = 0
         # How often the driver loop wakes sliced algos. Configurable because
         # the right cadence depends on the strategy's execution horizon — a
         # fast scalper TWAP wants tighter ticks than a slow VWAP unwind.
@@ -633,10 +656,20 @@ class OMSEngine:
             matched.add(candidate.order_id) if candidate is not None else None
 
             if candidate is None:
+                # Self-trade prevention: don't place a fresh order that would
+                # cross a sibling strategy's resting order.
+                if self._stp_blocks(signal, leg):
+                    continue
                 await self._place_quote(signal, leg, decision_ts_ingest=decision_ts_ingest)
             elif candidate.status in (OrderStatus.PENDING_AMEND, OrderStatus.PENDING_CANCEL):
                 pass  # in-flight op — wait for confirm, retry next tick
             elif candidate.status in amendable:
+                # Self-trade prevention: don't amend a resting order *into* a
+                # cross with a sibling. The candidate is already in ``matched``,
+                # so skipping leaves it resting at its current (non-crossing)
+                # price rather than cancelling it.
+                if self._stp_blocks(signal, leg):
+                    continue
                 await self._amend_quote(candidate, leg)
             # else PENDING_NEW: too early to amend — leave it alone this tick
 
@@ -649,6 +682,55 @@ class OMSEngine:
         for order in resting:
             if order.order_id not in matched and order.status is not OrderStatus.PENDING_AMEND:
                 await self._safe_cancel(order.order_id, why="reconcile_withdrawn")
+
+    def _crosses_other_strategy(
+        self, sid: StrategyId, iid: str, side: Side, price: Price | None
+    ) -> Order | None:
+        """Return a sibling strategy's resting order this leg would cross, if any.
+
+        A leg self-trades when, on the same instrument but a *different*
+        strategy, a live resting order sits on the opposite side at a price the
+        leg would match: a BUY at/above a resting SELL, or a SELL at/below a
+        resting BUY. Market (priceless) legs are not checked — they are not used
+        by the quoting strategies and crossing the spread is their intent.
+        """
+        if price is None:
+            return None
+        for o in self._orders.values():
+            if (
+                o.strategy_id == sid
+                or o.instrument.instrument_id != iid
+                or o.status not in _STP_LIVE_STATUSES
+                or o.price is None
+            ):
+                continue
+            if side is Side.BUY and o.side is Side.SELL and price >= o.price:
+                return o
+            if side is Side.SELL and o.side is Side.BUY and price <= o.price:
+                return o
+        return None
+
+    def _stp_blocks(self, signal: SignalEvent, leg: OrderLeg) -> bool:
+        """True if self-trade prevention should hold this leg back this tick."""
+        if not self._stp_enabled:
+            return False
+        blocker = self._crosses_other_strategy(
+            signal.strategy_id, signal.instrument.instrument_id, leg.side, leg.price
+        )
+        if blocker is None:
+            return False
+        self._self_trade_prevented += 1
+        _log.info(
+            "self_trade_prevented",
+            strategy_id=signal.strategy_id,
+            instrument=signal.instrument.symbol,
+            side=leg.side.value,
+            price=str(leg.price),
+            blocked_by_strategy=blocker.strategy_id,
+            blocker_side=blocker.side.value,
+            blocker_price=str(blocker.price),
+        )
+        return True
 
     async def _reconcile_sliced(
         self, signal: SignalEvent, sliced_legs: list[tuple[OrderLeg, ExecutionAlgo]]
@@ -1162,6 +1244,7 @@ class OMSEngine:
             "total_orders": len(self._orders),
             "active_algos": len(self._algos),
             "dropped_events": self._dropped_events,
+            "self_trade_prevented": self._self_trade_prevented,
         }
 
     # --- Helpers ---------------------------------------------------------

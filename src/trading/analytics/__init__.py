@@ -6,6 +6,7 @@ or observability without circular dependencies.
 
 from .avellaneda_stoikov import ASQuotes, AvellanedaStoikov
 from .classifiers import BVCClassifier, TickRuleClassifier
+from .glft import GLFT, GLFTQuotes
 from .imbalance import OBI, OFI
 from .microprice import Microprice
 from .position_sizing import (
@@ -41,6 +42,8 @@ __all__ = [
     "AvellanedaStoikov",
     "BVCClassifier",
     "EWMAVolatility",
+    "GLFT",
+    "GLFTQuotes",
     "HISTORICAL_SCENARIOS",
     "MarketRiskEngine",
     "MarketRiskMetrics",

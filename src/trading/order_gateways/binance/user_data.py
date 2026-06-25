@@ -350,10 +350,14 @@ class BinanceUserDataStream:
                     reason=f"binance REJECTED: {msg.get('r', '')}",
                 ),
             )
-        elif exec_type == "NEW":
-            # Binance sends NEW on every order acceptance. The order_gateway
-            # already published OrderAcknowledged on REST. Suppress to
-            # avoid duplicate events.
+        elif exec_type in ("NEW", "REPLACED"):
+            # Binance sends NEW on every order acceptance and REPLACED after a
+            # Futures PUT amend. In both cases the order_gateway already
+            # published the corresponding event (OrderAcknowledged / OrderAmended)
+            # synchronously from the REST response, so the WS copy is a duplicate
+            # confirmation. Suppress to avoid emitting it twice — and, for
+            # REPLACED, to avoid leaving the amended order stranded in
+            # PENDING_AMEND when it falls through to the unhandled branch.
             pass
         else:
             _log.debug("unhandled_execution_report", exec_type=exec_type)
