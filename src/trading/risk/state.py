@@ -118,7 +118,7 @@ class RiskState:
         # Roll the day forward on read too, so an idle strategy's stale loss
         # doesn't keep the kill switch armed past midnight UTC.
         self._maybe_rollover(bucket)
-        return bucket.cumulative_pnl - bucket.baseline_pnl
+        return bucket.realized_pnl - bucket.baseline_pnl
 
     def get_drawdown_pct(self, strategy_id: StrategyId) -> float | None:
         """Current drawdown from session-peak equity as a fraction (0.10 = 10%).
@@ -283,7 +283,7 @@ class RiskState:
         """
         today_idx = self._day_index()
         for bucket in self._daily_pnl.values():
-            bucket.baseline_pnl = bucket.cumulative_pnl
+            bucket.baseline_pnl = bucket.realized_pnl
             bucket.day_index = today_idx
 
     # --- Day-rollover helpers ---------------------------------------------
@@ -296,7 +296,7 @@ class RiskState:
         """Reset the daily baseline if the UTC calendar day has advanced."""
         today_idx = self._day_index()
         if bucket.day_index != today_idx:
-            bucket.baseline_pnl = bucket.cumulative_pnl
+            bucket.baseline_pnl = bucket.realized_pnl
             bucket.day_index = today_idx
         self._session_peak_equity.clear()  # new session = fresh drawdown baseline
 
