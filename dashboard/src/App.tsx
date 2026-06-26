@@ -12,6 +12,7 @@ import LogsPage from "./pages/LogsPage";
 import KillSwitchPage from "./pages/KillSwitchPage";
 import BacktestPage from "./pages/BacktestPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import ArchitecturePage from "./pages/ArchitecturePage";
 import { buildTheme, getInitialMode, THEME_STORAGE_KEY, type ThemeMode } from "./theme/theme";
 import { ThemeModeContext } from "./theme/ThemeModeContext";
 
@@ -39,6 +40,7 @@ function AppInner() {
         <Routes>
           <Route path="/" element={<DashboardPage state={state} />} />
           <Route path="/analytics" element={<AnalyticsPage state={state} />} />
+          <Route path="/architecture" element={<ArchitecturePage state={state} />} />
           <Route path="/logs" element={<LogsPage logs={state.logs} onClear={clearLogs} />} />
           <Route path="/killswitch" element={<KillSwitchPage killSwitch={state.killSwitch} dispatch={dispatch} />} />
           <Route path="/backtest" element={<BacktestPage backtest={state.backtest} dispatch={dispatch} />} />

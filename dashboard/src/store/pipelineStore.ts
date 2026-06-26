@@ -315,6 +315,29 @@ export interface PipelineState {
   backtest: BacktestState;                  // event-driven pair backtest run state
   latency: LatencySnapshot | null;          // latest pipeline latency percentiles
   killSwitch: KillSwitchState | null;       // latched kill-switch state (null until first snapshot/event)
+  // Monotonic per-stream event tally. Incremented once per event in the reducer
+  // and NEVER capped or reset, so consumers (the architecture graph's packet
+  // animation) can count exactly how many events flowed by differencing across
+  // renders — unlike the capped lists above, which evict and would under-count
+  // a fast stream. One key per logical bus stream.
+  eventCounts: EventCounts;
+}
+
+/** Stream keys for the monotonic eventCounts tally (see PipelineState). */
+export type EventStream =
+  | "tick" | "trade" | "signal" | "risk" | "order"
+  | "fill" | "routing" | "position" | "analytics";
+
+export type EventCounts = Record<EventStream, number>;
+
+const EMPTY_EVENT_COUNTS: EventCounts = {
+  tick: 0, trade: 0, signal: 0, risk: 0, order: 0,
+  fill: 0, routing: 0, position: 0, analytics: 0,
+};
+
+/** Return eventCounts with `stream` bumped by `n` (default 1). */
+function bump(counts: EventCounts, stream: EventStream, n = 1): EventCounts {
+  return { ...counts, [stream]: counts[stream] + n };
 }
 
 export const initialState: PipelineState = {
@@ -341,11 +364,16 @@ export const initialState: PipelineState = {
   backtest: _BACKTEST_INITIAL,
   latency: null,
   killSwitch: null,
+  eventCounts: EMPTY_EVENT_COUNTS,
 };
 
 export type PipelineAction =
   | { type: "SET_STATUS"; payload: ConnectionStatus }
-  | { type: "TICK"; payload: TickData }
+  // `coalesced` = how many raw wire ticks this dispatch represents (≥1). The WS
+  // layer throttles ticks per instrument to spare the reducer, but still reports
+  // the true count so the architecture graph's packet rate reflects real
+  // market-data throughput, not the throttled dispatch rate. Absent → 1.
+  | { type: "TICK"; payload: TickData; coalesced?: number }
   | { type: "TRADE"; payload: TradeData }
   | { type: "SIGNAL"; payload: SignalRow }
   | { type: "RISK"; payload: RiskRow }
@@ -406,16 +434,19 @@ export function pipelineReducer(
         ...state,
         ticks: { ...state.ticks, [action.payload.instrument]: action.payload },
         tickHistory: cap(state.tickHistory, action.payload, 200),
+        // Bump by the raw wire count this dispatch coalesced (default 1), so the
+        // tally tracks true tick throughput, not the throttled dispatch rate.
+        eventCounts: bump(state.eventCounts, "tick", action.coalesced ?? 1),
       };
 
     case "TRADE":
-      return { ...state, recentTrades: cap(state.recentTrades, action.payload, 50) };
+      return { ...state, recentTrades: cap(state.recentTrades, action.payload, 50), eventCounts: bump(state.eventCounts, "trade") };
 
     case "SIGNAL":
-      return { ...state, signals: cap(state.signals, action.payload, 100) };
+      return { ...state, signals: cap(state.signals, action.payload, 100), eventCounts: bump(state.eventCounts, "signal") };
 
     case "RISK":
-      return { ...state, riskDecisions: cap(state.riskDecisions, action.payload, 100) };
+      return { ...state, riskDecisions: cap(state.riskDecisions, action.payload, 100), eventCounts: bump(state.eventCounts, "risk") };
 
     case "ORDER": {
       // Merge with existing row so later events (ack, reject, cancel) update
@@ -431,17 +462,17 @@ export function pipelineReducer(
             status: incoming.status,
           }
         : incoming;
-      return { ...state, orders: capDedup(state.orders, merged, 100) };
+      return { ...state, orders: capDedup(state.orders, merged, 100), eventCounts: bump(state.eventCounts, "order") };
     }
 
     case "FILL": {
       // Fills are recorded in the fills list; PnL sampling is driven by POSITION
       // updates which carry authoritative unrealized + realized figures.
-      return { ...state, fills: cap(state.fills, action.payload, 100) };
+      return { ...state, fills: cap(state.fills, action.payload, 100), eventCounts: bump(state.eventCounts, "fill") };
     }
 
     case "ROUTING": {
-      return { ...state, routings: cap(state.routings, action.payload, 100) };
+      return { ...state, routings: cap(state.routings, action.payload, 100), eventCounts: bump(state.eventCounts, "routing") };
     }
 
     case "OPEN_ORDERS_SNAPSHOT": {
@@ -466,10 +497,13 @@ export function pipelineReducer(
         updatedPositions[row.instrument] = row;
       }
 
+      // One position event per row in the snapshot (per instrument that moved).
+      const posCounts = bump(state.eventCounts, "position", rows.length);
+
       const nowMs = Date.now();
       const shouldSample = nowMs - state._lastPnlSampleMs >= PNL_SAMPLE_INTERVAL_MS;
       if (!shouldSample) {
-        return { ...state, positions: updatedPositions, venueNet };
+        return { ...state, positions: updatedPositions, venueNet, eventCounts: posCounts };
       }
 
       const totalUnrealized = rows.reduce(
@@ -493,6 +527,7 @@ export function pipelineReducer(
         venueNet,
         pnlHistory: nextPnlHistory,
         _lastPnlSampleMs: nowMs,
+        eventCounts: posCounts,
       };
     }
 
@@ -548,6 +583,7 @@ export function pipelineReducer(
         analytics: snap,
         analyticsHistory: nextHistory,
         _lastAnalyticsSampleMs: shouldSample ? nowMs : state._lastAnalyticsSampleMs,
+        eventCounts: bump(state.eventCounts, "analytics"),
       };
     }
 

@@ -9,8 +9,13 @@ const WS_URL = "ws://localhost:8765/ws";
 const MAX_BACKOFF_MS = 30_000;
 // Minimum ms between TICK dispatches per instrument. Ticks arriving faster
 // than this are coalesced (latest wins) so the reducer doesn't run at the
-// full market-data rate (can be 100s/sec) and cause heap churn.
-const TICK_THROTTLE_MS = 100;
+// full market-data rate (can be 100s/sec) and cause heap churn. Kept low enough
+// that `eventCounts.tick` advances in fine steps — the architecture graph
+// releases packets per render, so a coarse interval makes the flow stutter
+// (clump-then-idle). 40ms ≈ 25 dispatches/sec/instrument: smooth flow while
+// still coalescing the bulk of a fast wire stream. The coalesced count still
+// carries the true tick total regardless of this interval.
+const TICK_THROTTLE_MS = 40;
 // Log records are batched and dispatched as a single LOGS_BATCH action to
 // avoid running the reducer (and triggering a re-render) per log line.
 const LOG_BATCH_MS = 200;
@@ -277,7 +282,10 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
   const unmountedRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-instrument throttle: maps instrument -> { lastDispatchMs, pendingTimer, pendingAction }
-  const tickThrottleRef = useRef<Map<string, { lastMs: number; timer: ReturnType<typeof setTimeout> | null; pending: PipelineAction }>>(new Map());
+  // `coalesced` counts raw wire ticks dropped since this instrument's last
+  // dispatch; it rides the next dispatched TICK so the store still tallies the
+  // true tick rate (see PipelineAction TICK.coalesced).
+  const tickThrottleRef = useRef<Map<string, { lastMs: number; timer: ReturnType<typeof setTimeout> | null; pending: PipelineAction; coalesced: number }>>(new Map());
   // Log batching: accumulate log rows and flush as a single LOGS_BATCH dispatch.
   const logBatchRef = useRef<{ rows: import("../store/pipelineStore").LogRow[]; timer: ReturnType<typeof setTimeout> | null }>({ rows: [], timer: null });
 
@@ -303,20 +311,23 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
         const entry = tickThrottleRef.current.get(instrument);
 
         if (!entry) {
-          // First tick for this instrument — dispatch immediately.
-          tickThrottleRef.current.set(instrument, { lastMs: now, timer: null, pending: action });
-          dispatch(action);
+          // First tick for this instrument — dispatch immediately (1 raw tick).
+          tickThrottleRef.current.set(instrument, { lastMs: now, timer: null, pending: action, coalesced: 0 });
+          dispatch({ ...action, coalesced: 1 });
         } else if (now - entry.lastMs >= TICK_THROTTLE_MS) {
           // Enough time has passed — dispatch and clear any pending coalesce timer.
+          // `coalesced` counts the ticks dropped since the last dispatch, plus this one.
           if (entry.timer !== null) {
             clearTimeout(entry.timer);
             entry.timer = null;
           }
           entry.lastMs = now;
           entry.pending = action;
-          dispatch(action);
+          dispatch({ ...action, coalesced: entry.coalesced + 1 });
+          entry.coalesced = 0;
         } else {
-          // Too soon — coalesce: replace pending, schedule a flush if not already pending.
+          // Too soon — coalesce: count this tick, replace pending, schedule a flush.
+          entry.coalesced++;
           entry.pending = action;
           if (entry.timer === null) {
             const delay = TICK_THROTTLE_MS - (now - entry.lastMs);
@@ -324,7 +335,9 @@ export function usePipelineSocket(dispatch: React.Dispatch<PipelineAction>): voi
               if (unmountedRef.current) return;
               entry.timer = null;
               entry.lastMs = Date.now();
-              dispatch(entry.pending);
+              // Flush the coalesced batch as one dispatch carrying the dropped count.
+              dispatch({ ...(entry.pending as Extract<PipelineAction, { type: "TICK" }>), coalesced: entry.coalesced });
+              entry.coalesced = 0;
             }, delay);
           }
         }

@@ -19,6 +19,7 @@ const STATUS_COLOR: Record<ConnectionStatus, string> = {
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard" },
   { to: "/analytics", label: "Analytics" },
+  { to: "/architecture", label: "Architecture" },
   { to: "/logs", label: "Logs" },
   { to: "/killswitch", label: "Kill Switch" },
   { to: "/backtest", label: "Backtest" },
