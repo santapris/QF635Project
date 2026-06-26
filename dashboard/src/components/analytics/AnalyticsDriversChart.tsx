@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import type { AnalyticsPoint } from "../../store/pipelineStore";
 import { formatTs } from "../../utils/formatTs";
+import { chartTooltipStyle } from "../../utils/chartTooltip";
 
 interface Props {
   history: AnalyticsPoint[];
@@ -62,6 +63,7 @@ export default function AnalyticsDriversChart({ history }: Props) {
             tickFormatter={(v: number) => v.toFixed(2)}
           />
           <Tooltip
+            {...chartTooltipStyle(theme)}
             labelFormatter={(v) => formatTs(Number(v))}
             formatter={(v: number) => v?.toFixed(5) ?? "—"}
           />

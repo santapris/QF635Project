@@ -209,7 +209,7 @@ export default function BacktestPage({ backtest, dispatch }: Props) {
   const isRunning = backtest.status === "running";
 
   return (
-    <Grid container spacing={2}>
+    <Grid container spacing={2} sx={{ flexGrow: 1, alignItems: "stretch", minHeight: 0 }}>
       {/* Config panel */}
       <Grid size={{ xs: 12, lg: 4 }}>
         <Paper sx={{ p: 2, height: "100%" }}>
@@ -283,7 +283,7 @@ export default function BacktestPage({ backtest, dispatch }: Props) {
       </Grid>
 
       {/* Results panel */}
-      <Grid size={{ xs: 12, lg: 8 }}>
+      <Grid size={{ xs: 12, lg: 8 }} sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
         {/* Metrics row */}
         {result && (
           <Paper sx={{ p: 2, mb: 2 }}>
@@ -330,7 +330,7 @@ export default function BacktestPage({ backtest, dispatch }: Props) {
         )}
 
         {/* Equity curve chart */}
-        <Paper sx={{ p: 2, height: 400, display: "flex", flexDirection: "column" }}>
+        <Paper sx={{ p: 2, flexGrow: 1, minHeight: 400, display: "flex", flexDirection: "column" }}>
           <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", mb: 0.5 }}>
             <Box>
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>

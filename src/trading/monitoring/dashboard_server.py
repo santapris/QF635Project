@@ -51,7 +51,7 @@ import asyncio
 import json
 import logging
 import threading
-from collections.abc import MutableSet
+from collections.abc import Awaitable, Callable, MutableSet
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -69,8 +69,10 @@ from ..core.events import (
 from ..event_bus.base import AbstractEventBus, Topic
 
 if TYPE_CHECKING:
+    from ..oms.engine import OMSEngine
     from ..position.engine import PositionEngine
     from ..risk.engine import RiskEngine
+    from ..strategy import StrategyRegistry
     from .latency import LatencyCollector
 
 _log = structlog.get_logger(__name__)
@@ -186,6 +188,15 @@ class DashboardServer:
         ``GET /state/killswitch`` reads the live latch state and
         ``POST /command/killswitch/reset`` re-arms the switch. Absent → those
         endpoints report/​return 503.
+    strategy_registry:
+        Optional reference to the running :class:`StrategyRegistry`. When
+        present, ``GET /state/strategies`` lists strategies with their paused
+        state and ``POST /command/strategy/{pause,resume}`` toggle dispatch.
+        Absent → those endpoints return 503.
+    oms_engine:
+        Optional reference to the running :class:`OMSEngine`. Used to cancel a
+        strategy's resting orders when it is paused, so the strategy goes fully
+        quiet. Absent → pause still suppresses signals but leaves resting orders.
     """
 
     def __init__(
@@ -197,6 +208,8 @@ class DashboardServer:
         position_engine: "PositionEngine | None" = None,
         latency_collector: "LatencyCollector | None" = None,
         risk_engine: "RiskEngine | None" = None,
+        strategy_registry: "StrategyRegistry | None" = None,
+        oms_engine: "OMSEngine | None" = None,
     ) -> None:
         self._bus = bus
         self._port = port
@@ -204,6 +217,8 @@ class DashboardServer:
         self._position_engine = position_engine
         self._latency_collector = latency_collector
         self._risk_engine = risk_engine
+        self._strategy_registry = strategy_registry
+        self._oms_engine = oms_engine
         # The trading event loop, captured on start(). The uvicorn server runs
         # on its own thread/loop; any write into engine state (kill-switch
         # reset) must be marshalled back onto *this* loop, where the engine
@@ -316,6 +331,7 @@ class DashboardServer:
 
     def _positions_payload(self) -> dict[str, Any]:
         engine = self._position_engine
+        registry = self._strategy_registry
         positions: list[dict[str, Any]] = []
         if engine is not None:
             for position in engine.get_all_positions():
@@ -327,6 +343,10 @@ class DashboardServer:
                     "realized_pnl": str(position.realized_pnl),
                     "unrealized_pnl": str(position.unrealized_pnl),
                     "mark_price": str(position.mark_price),
+                    "paused": (
+                        registry.is_paused(position.strategy_id)
+                        if registry is not None else False
+                    ),
                 })
         # Venue net positions: ground truth from the exchange, shown as the
         # 'net' row. Comparable to the exchange UI; the per-strategy rows
@@ -432,6 +452,50 @@ class DashboardServer:
         engine.kill_switch.reset()
         _log.warning("kill_switch_reset_via_dashboard")
         return self._killswitch_payload()
+
+    # ------------------------------------------------------------------
+    # Strategy pause / resume
+    # ------------------------------------------------------------------
+
+    def _strategies_payload(self) -> dict[str, Any]:
+        """Every registered strategy with its paused state. The frontend's
+        source of truth for the control list — a paused strategy with a flat
+        position has no position row, so it must come from here."""
+        registry = self._strategy_registry
+        if registry is None:
+            return {"timestamp": _now_iso(), "available": False, "strategies": []}
+        return {
+            "timestamp": _now_iso(),
+            "available": True,
+            "strategies": [
+                {"strategy_id": str(sid), "paused": registry.is_paused(sid)}
+                for sid in registry.strategy_ids
+            ],
+        }
+
+    async def _pause_strategy(self, strategy_id: str) -> dict[str, Any]:
+        """Pause dispatch and cancel the strategy's resting orders, on the
+        trading loop. Cancelling routes through the OMS (the sole order mutator).
+        """
+        registry = self._strategy_registry
+        if registry is None:
+            raise RuntimeError("no strategy registry wired")
+        registry.pause(strategy_id)  # raises KeyError for unknown id
+        if self._oms_engine is not None:
+            await self._oms_engine.cancel_strategy_orders(
+                strategy_id, why="strategy_paused"
+            )
+        _log.warning("strategy_paused_via_dashboard", strategy_id=strategy_id)
+        return self._strategies_payload()
+
+    async def _resume_strategy(self, strategy_id: str) -> dict[str, Any]:
+        """Re-enable dispatch for a strategy on the trading loop."""
+        registry = self._strategy_registry
+        if registry is None:
+            raise RuntimeError("no strategy registry wired")
+        registry.resume(strategy_id)  # raises KeyError for unknown id
+        _log.warning("strategy_resumed_via_dashboard", strategy_id=strategy_id)
+        return self._strategies_payload()
 
     def _analytics_payload(self) -> dict[str, Any]:
         m = self._latest_microstructure
@@ -616,6 +680,42 @@ class DashboardServer:
             payload = await asyncio.wrap_future(fut)
             return JSONResponse(payload)
 
+        async def strategies_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._strategies_payload())
+
+        async def _strategy_command(
+            request: Request, coro_factory: Callable[[str], Awaitable[dict[str, Any]]]
+        ) -> JSONResponse:
+            """Shared body for pause/resume: validate, marshal onto the trading
+            loop, map an unknown strategy_id to 404."""
+            if self._strategy_registry is None or self._trading_loop is None:
+                return JSONResponse(
+                    {"error": "strategy control unavailable"}, status_code=503
+                )
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            strategy_id = str(body.get("strategy_id") or "").strip()
+            if not strategy_id:
+                return JSONResponse({"error": "strategy_id required"}, status_code=400)
+            fut = asyncio.run_coroutine_threadsafe(
+                coro_factory(strategy_id), self._trading_loop
+            )
+            try:
+                payload = await asyncio.wrap_future(fut)
+            except KeyError:
+                return JSONResponse(
+                    {"error": f"unknown strategy_id: {strategy_id}"}, status_code=404
+                )
+            return JSONResponse(payload)
+
+        async def strategy_pause_endpoint(request: Request) -> JSONResponse:
+            return await _strategy_command(request, self._pause_strategy)
+
+        async def strategy_resume_endpoint(request: Request) -> JSONResponse:
+            return await _strategy_command(request, self._resume_strategy)
+
         async def websocket_endpoint(ws: WebSocket) -> None:
             await ws.accept()
             clients.add(ws)
@@ -662,6 +762,17 @@ class DashboardServer:
                 Route(
                     "/command/killswitch/reset",
                     killswitch_reset_endpoint,
+                    methods=["POST"],
+                ),
+                Route("/state/strategies", strategies_endpoint, methods=["GET"]),
+                Route(
+                    "/command/strategy/pause",
+                    strategy_pause_endpoint,
+                    methods=["POST"],
+                ),
+                Route(
+                    "/command/strategy/resume",
+                    strategy_resume_endpoint,
                     methods=["POST"],
                 ),
                 WebSocketRoute("/ws", websocket_endpoint),

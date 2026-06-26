@@ -64,6 +64,8 @@ async def _amain(args: argparse.Namespace) -> int:
             port=args.dashboard_port,
             position_engine=app.position_engine,
             risk_engine=app.risk_engine,
+            strategy_registry=app.strategy_registry,
+            oms_engine=app.oms_engine,
         )
 
     await app.start()

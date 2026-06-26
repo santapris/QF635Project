@@ -140,7 +140,11 @@ export default function DashboardPage({ state }: Props) {
           />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 2 }}>
-          <SpecCell label="Open Orders" value={nOpenOrders} unit={`/ ${liveInstruments} live`} />
+          <SpecCell
+            label="Open Orders"
+            value={nOpenOrders}
+            unit={`across ${liveInstruments} instrument${liveInstruments === 1 ? "" : "s"}`}
+          />
         </Grid>
         <Grid size={{ xs: 6, sm: 4, md: 2 }}>
           <SpecCell label="Fills" value={nFills} unit="recent" />
@@ -182,7 +186,7 @@ export default function DashboardPage({ state }: Props) {
         <SectionLabel>Position &amp; Account</SectionLabel>
         <Grid container spacing={2}>
           <Grid size={{ xs: 12, lg: 8 }} sx={{ minHeight: 240 }}>
-            <PositionPanel positions={state.positions} venueNet={state.venueNet} />
+            <PositionPanel positions={state.positions} venueNet={state.venueNet} strategies={state.strategies} />
           </Grid>
           <Grid size={{ xs: 12, lg: 4 }} sx={{ minHeight: 240 }}>
             <AccountPanel account={state.account} />

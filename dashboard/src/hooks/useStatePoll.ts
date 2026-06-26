@@ -24,6 +24,7 @@ const OPEN_ORDERS_INTERVAL_MS = 2_000;
 const ANALYTICS_INTERVAL_MS   = 500;
 const LATENCY_INTERVAL_MS     = 1_000;
 const KILLSWITCH_INTERVAL_MS  = 3_000;
+const STRATEGIES_INTERVAL_MS  = 2_000;
 
 interface KillSwitchResponse {
   timestamp: string;
@@ -44,6 +45,7 @@ interface PositionsResponse {
     realized_pnl: string;
     unrealized_pnl: string;
     mark_price: string;
+    paused?: boolean;
   }>;
   venue_net: Array<{
     instrument: string;
@@ -57,6 +59,12 @@ interface PositionsResponse {
 interface AccountResponse {
   timestamp: string;
   balances: Array<{ asset: string; free: string; locked: string }>;
+}
+
+interface StrategiesResponse {
+  timestamp: string;
+  available: boolean;
+  strategies: Array<{ strategy_id: string; paused: boolean }>;
 }
 
 interface OpenOrdersResponse {
@@ -103,6 +111,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
     let analyticsTimer:  ReturnType<typeof setTimeout> | null = null;
     let latencyTimer:    ReturnType<typeof setTimeout> | null = null;
     let killSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+    let strategiesTimer: ReturnType<typeof setTimeout> | null = null;
 
     const tickPositions = async () => {
       const data = await fetchJSON<PositionsResponse>("/state/positions", ctrl.signal);
@@ -120,6 +129,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
               unrealized_pnl: p.unrealized_pnl,
               realized_pnl: p.realized_pnl,
               mark_price: p.mark_price,
+              paused: p.paused ?? false,
             })),
             venueNet: (data.venue_net ?? []).map((v) => ({
               id: v.instrument,
@@ -279,6 +289,16 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       }
     };
 
+    const tickStrategies = async () => {
+      const data = await fetchJSON<StrategiesResponse>("/state/strategies", ctrl.signal);
+      if (data && !ctrl.signal.aborted) {
+        dispatch({ type: "STRATEGIES_SNAPSHOT", payload: data.strategies ?? [] });
+      }
+      if (!ctrl.signal.aborted) {
+        strategiesTimer = setTimeout(tickStrategies, STRATEGIES_INTERVAL_MS);
+      }
+    };
+
     // Kick all polls immediately so the panels populate on first paint.
     tickPositions();
     tickAccount();
@@ -286,6 +306,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
     tickAnalytics();
     tickLatency();
     tickKillSwitch();
+    tickStrategies();
 
     return () => {
       ctrl.abort();
@@ -295,6 +316,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       if (analyticsTimer)  clearTimeout(analyticsTimer);
       if (latencyTimer)    clearTimeout(latencyTimer);
       if (killSwitchTimer) clearTimeout(killSwitchTimer);
+      if (strategiesTimer) clearTimeout(strategiesTimer);
     };
   }, [dispatch]);
 }

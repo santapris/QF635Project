@@ -25,13 +25,22 @@ interface Props {
 }
 
 const SHELL = {
-  maxWidth: 480,
-  mx: "auto",
-  mt: 8,
+  // `main` is a flex column, so stretch to fill it rather than relying on height:100%.
+  flexGrow: 1,
+  alignSelf: "stretch",
+  minHeight: 0,
+  width: "100%",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
   borderRadius: 4,
   border: "1px solid",
   borderColor: "divider",
 } as const;
+
+// Inner content stays readable; only the Paper stretches to fill the page.
+const CONTENT_MAX = 480;
 
 export default function KillSwitchPage({ killSwitch, dispatch }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -42,8 +51,10 @@ export default function KillSwitchPage({ killSwitch, dispatch }: Props) {
   if (killSwitch === null) {
     return (
       <Paper sx={{ ...SHELL, p: 4 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Kill Switch</Typography>
-        <Alert severity="info" sx={{ borderRadius: 2 }}>Loading kill-switch state…</Alert>
+        <Box sx={{ width: "100%", maxWidth: CONTENT_MAX }}>
+          <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Kill Switch</Typography>
+          <Alert severity="info" sx={{ borderRadius: 2 }}>Loading kill-switch state…</Alert>
+        </Box>
       </Paper>
     );
   }
@@ -52,11 +63,13 @@ export default function KillSwitchPage({ killSwitch, dispatch }: Props) {
   if (!killSwitch.available) {
     return (
       <Paper sx={{ ...SHELL, p: 4 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Kill Switch</Typography>
-        <Alert severity="warning" sx={{ borderRadius: 2 }}>
-          No risk engine is connected to this dashboard, so the kill-switch state
-          is unavailable.
-        </Alert>
+        <Box sx={{ width: "100%", maxWidth: CONTENT_MAX }}>
+          <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Kill Switch</Typography>
+          <Alert severity="warning" sx={{ borderRadius: 2 }}>
+            No risk engine is connected to this dashboard, so the kill-switch state
+            is unavailable.
+          </Alert>
+        </Box>
       </Paper>
     );
   }
@@ -119,6 +132,7 @@ export default function KillSwitchPage({ killSwitch, dispatch }: Props) {
       <Box
         sx={{
           display: "flex", flexDirection: "column", alignItems: "center", gap: 3.5,
+          width: "100%", maxWidth: CONTENT_MAX,
         }}
       >
         <Typography

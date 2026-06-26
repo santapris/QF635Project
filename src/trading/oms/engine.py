@@ -928,6 +928,40 @@ class OMSEngine:
                 cancelled += 1
         _log.warning("cancel_all_resting_complete", reason=why, count=cancelled)
 
+    async def cancel_strategy_orders(self, strategy_id: StrategyId, *, why: str = "strategy_paused") -> int:
+        """Cancel every non-terminal order owned by ``strategy_id``.
+
+        The pause-strategy cleanup arm — scoped to a single strategy but, unlike
+        :meth:`_cancel_resting`, spanning all of that strategy's instruments and
+        including execution-algo children. Algos owned by the strategy are
+        retired first so their driver loops do not re-emit fresh slices against
+        orders we are cancelling (same ordering as :meth:`_cancel_all_resting`).
+
+        Returns the number of orders cancelled. Safe to call when the strategy
+        has nothing resting — it simply cancels zero.
+        """
+        # Retire algos owned by this strategy. Algos are keyed by leg_id, so we
+        # find the strategy's legs via its (non-terminal) orders first.
+        strategy_legs = {
+            order.parent_leg_id
+            for order in self._orders.values()
+            if order.strategy_id == strategy_id and order.parent_leg_id is not None
+        }
+        for leg_id in list(self._algos):
+            if leg_id in strategy_legs:
+                self._retire_algo(leg_id)
+
+        cancelled = 0
+        for order in list(self._orders.values()):
+            if order.strategy_id == strategy_id and not order.is_terminal:
+                await self._safe_cancel(order.order_id, why=why)
+                cancelled += 1
+        _log.warning(
+            "cancel_strategy_orders_complete",
+            strategy_id=strategy_id, reason=why, count=cancelled,
+        )
+        return cancelled
+
     async def _safe_cancel(self, order_id: OrderId, *, why: str) -> None:
         """Cancel an order, tolerating the race where it terminalized first."""
         try:

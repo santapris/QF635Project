@@ -32,6 +32,8 @@ function AppInner() {
         component="main"
         sx={{
           flexGrow: 1,
+          display: "flex",
+          flexDirection: "column",
           mt: `${TOOLBAR_HEIGHT}px`,
           p: 2,
           overflow: "auto",

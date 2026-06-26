@@ -124,6 +124,15 @@ export interface PositionRow {
   realized_pnl: string;
   mark_price: string;
   ts: number;  // ms since epoch
+  paused: boolean;  // operator pause latch for this strategy
+}
+
+// One registered strategy and its pause state — the control list backing the
+// per-strategy stop/start buttons. Sourced from GET /state/strategies so that
+// strategies with a flat position (no position row) remain controllable.
+export interface StrategyInfo {
+  strategy_id: string;
+  paused: boolean;
 }
 
 // Exchange-reported net position per instrument — ground truth, comparable
@@ -305,6 +314,7 @@ export interface PipelineState {
   openOrders: OpenOrderRow[];               // individual currently-resting orders (authoritative snapshot)
   positions: Record<string, PositionRow>;   // `${strategy_id}:${instrument}` -> latest position
   venueNet: VenueNetRow[];                  // exchange-reported net per instrument (ground truth)
+  strategies: StrategyInfo[];               // all registered strategies + pause state (control list)
   pnlHistory: PnlPoint[];                   // time-series for chart, rolling 500
   account: AccountSnapshot | null;          // latest exchange account snapshot
   logs: LogRow[];                           // rolling 500
@@ -354,6 +364,7 @@ export const initialState: PipelineState = {
   openOrders: [],
   positions: {},
   venueNet: [],
+  strategies: [],
   pnlHistory: [],
   account: null,
   logs: [],
@@ -382,6 +393,7 @@ export type PipelineAction =
   | { type: "ROUTING"; payload: RoutingRow }
   | { type: "OPEN_ORDERS_SNAPSHOT"; payload: { exposures: WorkingExposureRow[]; orders: OpenOrderRow[] } }
   | { type: "POSITIONS_SNAPSHOT"; payload: { positions: PositionRow[]; venueNet: VenueNetRow[] } }
+  | { type: "STRATEGIES_SNAPSHOT"; payload: StrategyInfo[] }
   | { type: "ACCOUNT"; payload: AccountSnapshot }
   | { type: "LOG"; payload: LogRow }
   | { type: "LOGS_BATCH"; payload: LogRow[] }
@@ -533,6 +545,10 @@ export function pipelineReducer(
         eventCounts: posCounts,
       };
     }
+
+    case "STRATEGIES_SNAPSHOT":
+      // Authoritative list from REST — replace wholesale.
+      return { ...state, strategies: action.payload };
 
     case "ACCOUNT":
       return { ...state, account: action.payload };

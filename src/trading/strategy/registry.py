@@ -91,6 +91,11 @@ class StrategyRegistry:
         self._instrument_index: dict[str, list[StrategyId]] = defaultdict(list)
         self._parameters: dict[StrategyId, dict[str, Any]] = {}
         self._loggers: dict[StrategyId, structlog.BoundLogger] = {}
+        # Strategies whose signal dispatch is currently suppressed (operator
+        # pause via the dashboard). Mutated only from the trading loop — the
+        # dashboard marshals pause/resume calls onto it via
+        # run_coroutine_threadsafe — so no lock is needed.
+        self._paused: set[StrategyId] = set()
         self._started = False
         # Side-channel for tick→signal latency: signal.event_id → tick.ts_ingest.
         # Bounded to prevent growth if strategies emit signals faster than they're consumed.
@@ -135,6 +140,35 @@ class StrategyRegistry:
     @property
     def strategy_ids(self) -> list[StrategyId]:
         return list(self._strategies)
+
+    # --- Pause / resume ----------------------------------------------------
+    # Operator controls surfaced on the dashboard. Pausing suppresses signal
+    # dispatch for a strategy (see _invoke); the OMS-side cancellation of any
+    # resting orders is driven separately by the dashboard so the strategy goes
+    # fully quiet. Held inventory is untouched.
+
+    def pause(self, strategy_id: StrategyId) -> None:
+        """Suppress signal dispatch for a strategy. Idempotent."""
+        if strategy_id not in self._strategies:
+            raise KeyError(strategy_id)
+        if strategy_id not in self._paused:
+            self._paused.add(strategy_id)
+            _log.warning("strategy_paused", strategy_id=strategy_id)
+
+    def resume(self, strategy_id: StrategyId) -> None:
+        """Re-enable signal dispatch for a paused strategy. Idempotent."""
+        if strategy_id not in self._strategies:
+            raise KeyError(strategy_id)
+        if strategy_id in self._paused:
+            self._paused.discard(strategy_id)
+            _log.warning("strategy_resumed", strategy_id=strategy_id)
+
+    def is_paused(self, strategy_id: StrategyId) -> bool:
+        return strategy_id in self._paused
+
+    @property
+    def paused_ids(self) -> list[StrategyId]:
+        return list(self._paused)
 
     @property
     def signal_tick_map(self) -> dict:
@@ -222,6 +256,11 @@ class StrategyRegistry:
         event: BaseEvent,
         handler: _DispatchHandler,
     ) -> None:
+        # Paused strategies are skipped entirely: no signals, and no diagnostics
+        # publish below. The strategy still receives no events, so it stays inert
+        # until resumed (its accumulated internal state is preserved).
+        if sid in self._paused:
+            return
         strategy = self._strategies[sid]
         ctx = self._make_context(sid)
         try:

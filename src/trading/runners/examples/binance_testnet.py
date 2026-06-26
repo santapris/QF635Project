@@ -322,6 +322,8 @@ async def _amain() -> int:
             bus=bus, port=settings.dashboard_port, position_engine=position,
             latency_collector=latency_collector,
             risk_engine=risk,
+            strategy_registry=strategies,
+            oms_engine=oms,
         )
         if settings.dashboard_port > 0
         else None
