@@ -5,6 +5,7 @@ import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { OrderRow } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
+import { formatNum } from "../utils/formatNum";
 
 const STATUS_COLOR: Record<string, "default" | "info" | "success" | "error" | "warning"> = {
   new: "info",
@@ -34,8 +35,8 @@ const columns: GridColDef<OrderRow>[] = [
     ),
   },
   { field: "order_type", headerName: "Type", width: 90 },
-  { field: "quantity", headerName: "Qty", width: 80, align: "right", headerAlign: "right" },
-  { field: "price", headerName: "Price", width: 100, align: "right", headerAlign: "right" },
+  { field: "quantity", headerName: "Qty", width: 80, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "price", headerName: "Price", width: 100, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string | null) },
   {
     field: "status",
     headerName: "Status",

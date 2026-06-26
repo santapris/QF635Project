@@ -5,12 +5,13 @@ import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { AccountSnapshot, AccountBalance } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
+import { formatNum } from "../utils/formatNum";
 
 const columns: GridColDef<AccountBalance & { id: string; total: string }>[] = [
   { field: "asset", headerName: "Asset", flex: 1, minWidth: 80 },
-  { field: "free", headerName: "Free", flex: 1, minWidth: 110, align: "right", headerAlign: "right" },
-  { field: "locked", headerName: "Locked", flex: 1, minWidth: 110, align: "right", headerAlign: "right" },
-  { field: "total", headerName: "Total", flex: 1, minWidth: 110, align: "right", headerAlign: "right" },
+  { field: "free", headerName: "Free", flex: 1, minWidth: 110, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "locked", headerName: "Locked", flex: 1, minWidth: 110, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "total", headerName: "Total", flex: 1, minWidth: 110, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
 ];
 
 interface Props {

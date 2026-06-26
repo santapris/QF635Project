@@ -5,6 +5,7 @@ import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { FillRow } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
+import { formatNum } from "../utils/formatNum";
 
 const columns: GridColDef<FillRow>[] = [
   { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
@@ -25,9 +26,9 @@ const columns: GridColDef<FillRow>[] = [
       </Typography>
     ),
   },
-  { field: "fill_price", headerName: "Price", width: 110, align: "right", headerAlign: "right" },
-  { field: "fill_quantity", headerName: "Qty", width: 90, align: "right", headerAlign: "right" },
-  { field: "fee", headerName: "Fee", width: 90, align: "right", headerAlign: "right" },
+  { field: "fill_price", headerName: "Price", width: 110, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "fill_quantity", headerName: "Qty", width: 90, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "fee", headerName: "Fee", width: 90, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
   {
     field: "is_maker",
     headerName: "Liquidity",

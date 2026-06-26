@@ -1,5 +1,6 @@
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
+import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
 import { DataGrid, type GridColDef, type GridRenderCellParams } from "@mui/x-data-grid";
 import type { AnalyticsPoint } from "../../store/pipelineStore";
@@ -62,18 +63,20 @@ export default function AnalyticsTable({ history }: Props) {
   const rows = [...history].reverse().map((p, i) => ({ id: i, ...p }));
 
   return (
-    <Paper sx={{ p: 2, height: "100%" }}>
+    <Paper sx={{ p: 2, height: "100%", display: "flex", flexDirection: "column" }}>
       <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 700 }}>
         Analytics Log
       </Typography>
-      <DataGrid
-        rows={rows}
-        columns={columns}
-        density="compact"
-        disableRowSelectionOnClick
-        hideFooter={rows.length <= 100}
-        sx={{ border: "none", fontSize: 11 }}
-      />
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+        <DataGrid
+          rows={rows}
+          columns={columns}
+          density="compact"
+          disableRowSelectionOnClick
+          hideFooter={rows.length <= 100}
+          sx={{ border: "none", fontSize: 11, height: "100%" }}
+        />
+      </Box>
     </Paper>
   );
 }

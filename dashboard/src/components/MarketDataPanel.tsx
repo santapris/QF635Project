@@ -15,6 +15,7 @@ import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { TickData, TradeData } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
+import { formatNum } from "../utils/formatNum";
 
 type TickRow = TickData;
 type TradeRowWithId = TradeData;
@@ -38,11 +39,11 @@ const tickColumns: GridColDef<TickRow>[] = [
         color="success"
         sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
       >
-        {value}
+        {formatNum(value as string)}
       </Typography>
     ),
   },
-  { field: "bid_size", headerName: "Bid Sz", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
+  { field: "bid_size", headerName: "Bid Sz", flex: 1, minWidth: 90, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
   {
     field: "ask_price",
     headerName: "Ask",
@@ -56,11 +57,11 @@ const tickColumns: GridColDef<TickRow>[] = [
         color="error"
         sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
       >
-        {value}
+        {formatNum(value as string)}
       </Typography>
     ),
   },
-  { field: "ask_size", headerName: "Ask Sz", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
+  { field: "ask_size", headerName: "Ask Sz", flex: 1, minWidth: 90, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
 ];
 
 const tickTapeColumns: GridColDef<TickRow>[] = [
@@ -79,11 +80,11 @@ const tickTapeColumns: GridColDef<TickRow>[] = [
         color="success"
         sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
       >
-        {value}
+        {formatNum(value as string)}
       </Typography>
     ),
   },
-  { field: "bid_size", headerName: "Bid Sz", width: 80, align: "right", headerAlign: "right" },
+  { field: "bid_size", headerName: "Bid Sz", width: 80, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
   {
     field: "ask_price",
     headerName: "Ask",
@@ -97,18 +98,18 @@ const tickTapeColumns: GridColDef<TickRow>[] = [
         color="error"
         sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "end", fontWeight: 700 }}
       >
-        {value}
+        {formatNum(value as string)}
       </Typography>
     ),
   },
-  { field: "ask_size", headerName: "Ask Sz", width: 80, align: "right", headerAlign: "right" },
+  { field: "ask_size", headerName: "Ask Sz", width: 80, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
 ];
 
 const tradeColumns: GridColDef<TradeRowWithId>[] = [
   { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
   { field: "instrument", headerName: "Instrument", flex: 1, minWidth: 110 },
-  { field: "price", headerName: "Price", flex: 1, minWidth: 100, align: "right", headerAlign: "right" },
-  { field: "quantity", headerName: "Qty", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
+  { field: "price", headerName: "Price", flex: 1, minWidth: 100, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "quantity", headerName: "Qty", flex: 1, minWidth: 90, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
   {
     field: "aggressor_side",
     headerName: "Side",

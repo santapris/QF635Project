@@ -5,6 +5,7 @@ import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { RoutingRow } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
+import { formatNum } from "../utils/formatNum";
 
 const columns: GridColDef<RoutingRow>[] = [
   { field: "ts", headerName: "Time", width: 110, renderCell: ({ value }) => formatTs(value as number) },
@@ -24,7 +25,7 @@ const columns: GridColDef<RoutingRow>[] = [
       </Typography>
     ),
   },
-  { field: "quantity", headerName: "Qty", width: 90, align: "right", headerAlign: "right" },
+  { field: "quantity", headerName: "Qty", width: 90, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
   {
     field: "intent",
     headerName: "Intent",

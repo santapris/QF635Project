@@ -1,5 +1,6 @@
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
+import Box from "@mui/material/Box";
 import { useTheme } from "@mui/material/styles";
 import {
   ResponsiveContainer,
@@ -57,11 +58,12 @@ export default function SpreadDecompositionChart({ history }: Props) {
   }
 
   return (
-    <Paper sx={{ p: 2, height: "100%" }}>
+    <Paper sx={{ p: 2, height: "100%", display: "flex", flexDirection: "column" }}>
       <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 700 }}>
         Spread Decomposition — base A-S + VPIN premium | inventory skew (right)
       </Typography>
-      <ResponsiveContainer width="100%" height="90%">
+      <Box sx={{ flex: 1, minHeight: 0 }}>
+      <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 4, right: 40, bottom: 4, left: 0 }}>
           <XAxis dataKey="ts" tickFormatter={(v: number) => formatTs(v)} tick={{ fontSize: 11 }} minTickGap={60} />
           <YAxis
@@ -120,6 +122,7 @@ export default function SpreadDecompositionChart({ history }: Props) {
           />
         </ComposedChart>
       </ResponsiveContainer>
+      </Box>
     </Paper>
   );
 }

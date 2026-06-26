@@ -4,6 +4,7 @@ import Box from "@mui/material/Box";
 import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { PositionRow, VenueNetRow } from "../store/pipelineStore";
+import { formatNum } from "../utils/formatNum";
 
 function pnlColor(val: string): string {
   const n = parseFloat(val);
@@ -12,15 +13,18 @@ function pnlColor(val: string): string {
   return "text.primary";
 }
 
-function formatPnl(val: string): string {
-  const n = parseFloat(val);
-  if (isNaN(n)) return val;
-  return n.toFixed(4);
-}
-
 const columns: GridColDef<PositionRow>[] = [
+  { field: "strategy_id", headerName: "Strategy", flex: 1, minWidth: 110 },
   { field: "instrument", headerName: "Instrument", flex: 1, minWidth: 120 },
-  { field: "quantity", headerName: "Qty", flex: 1, minWidth: 90, align: "right", headerAlign: "right" },
+  {
+    field: "quantity",
+    headerName: "Qty",
+    flex: 1,
+    minWidth: 90,
+    align: "right",
+    headerAlign: "right",
+    valueFormatter: (value) => formatNum(value as string),
+  },
   {
     field: "average_entry_price",
     headerName: "Avg Entry",
@@ -28,8 +32,17 @@ const columns: GridColDef<PositionRow>[] = [
     minWidth: 110,
     align: "right",
     headerAlign: "right",
+    valueFormatter: (value) => formatNum(value as string),
   },
-  { field: "mark_price", headerName: "Mark", flex: 1, minWidth: 110, align: "right", headerAlign: "right" },
+  {
+    field: "mark_price",
+    headerName: "Mark",
+    flex: 1,
+    minWidth: 110,
+    align: "right",
+    headerAlign: "right",
+    valueFormatter: (value) => formatNum(value as string),
+  },
   {
     field: "unrealized_pnl",
     headerName: "Unrealized PnL",
@@ -38,7 +51,7 @@ const columns: GridColDef<PositionRow>[] = [
     align: "right",
     headerAlign: "right",
     renderCell: ({ value }) => (
-      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatPnl(value as string)}</Box>
+      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatNum(value as string)}</Box>
     ),
   },
   {
@@ -49,7 +62,7 @@ const columns: GridColDef<PositionRow>[] = [
     align: "right",
     headerAlign: "right",
     renderCell: ({ value }) => (
-      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatPnl(value as string)}</Box>
+      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatNum(value as string)}</Box>
     ),
   },
 ];
@@ -67,13 +80,29 @@ const venueColumns: GridColDef<VenueNetRow>[] = [
       const n = parseFloat(value as string);
       return (
         <Box sx={{ color: n > 0 ? "success.main" : n < 0 ? "error.main" : "text.primary", fontWeight: 600 }}>
-          {value}
+          {formatNum(value as string)}
         </Box>
       );
     },
   },
-  { field: "entry_price", headerName: "Entry", flex: 1, minWidth: 110, align: "right", headerAlign: "right" },
-  { field: "mark_price", headerName: "Mark", flex: 1, minWidth: 110, align: "right", headerAlign: "right" },
+  {
+    field: "entry_price",
+    headerName: "Entry",
+    flex: 1,
+    minWidth: 110,
+    align: "right",
+    headerAlign: "right",
+    valueFormatter: (value) => formatNum(value as string),
+  },
+  {
+    field: "mark_price",
+    headerName: "Mark",
+    flex: 1,
+    minWidth: 110,
+    align: "right",
+    headerAlign: "right",
+    valueFormatter: (value) => formatNum(value as string),
+  },
   {
     field: "unrealized_pnl",
     headerName: "Unrealized PnL",
@@ -82,7 +111,7 @@ const venueColumns: GridColDef<VenueNetRow>[] = [
     align: "right",
     headerAlign: "right",
     renderCell: ({ value }) => (
-      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatPnl(value as string)}</Box>
+      <Box sx={{ color: pnlColor(value as string), fontWeight: 600 }}>{formatNum(value as string)}</Box>
     ),
   },
 ];

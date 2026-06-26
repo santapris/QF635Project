@@ -9,6 +9,7 @@ import { DataGrid } from "@mui/x-data-grid";
 import type { GridColDef } from "@mui/x-data-grid";
 import type { OpenOrderRow } from "../store/pipelineStore";
 import { formatTs } from "../utils/formatTs";
+import { formatNum } from "../utils/formatNum";
 
 const STATUS_VALUES = ["ALL", "ACKNOWLEDGED", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED"] as const;
 
@@ -40,9 +41,9 @@ const columns: GridColDef<OpenOrderRow>[] = [
     ),
   },
   { field: "order_type", headerName: "Type", width: 90 },
-  { field: "quantity", headerName: "Qty", width: 80, align: "right", headerAlign: "right" },
-  { field: "leaves_quantity", headerName: "Leaves", width: 80, align: "right", headerAlign: "right" },
-  { field: "price", headerName: "Price", width: 100, align: "right", headerAlign: "right" },
+  { field: "quantity", headerName: "Qty", width: 80, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "leaves_quantity", headerName: "Leaves", width: 80, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string) },
+  { field: "price", headerName: "Price", width: 100, align: "right", headerAlign: "right", valueFormatter: (value) => formatNum(value as string | null) },
   {
     field: "status",
     headerName: "Status",

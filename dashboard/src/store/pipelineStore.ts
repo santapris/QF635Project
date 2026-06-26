@@ -303,7 +303,7 @@ export interface PipelineState {
   routings: RoutingRow[];                   // rolling 100 — OMS execution-routing decisions
   openExposures: WorkingExposureRow[];      // working-order exposure per (strategy, instrument)
   openOrders: OpenOrderRow[];               // individual currently-resting orders (authoritative snapshot)
-  positions: Record<string, PositionRow>;   // instrument -> latest position
+  positions: Record<string, PositionRow>;   // `${strategy_id}:${instrument}` -> latest position
   venueNet: VenueNetRow[];                  // exchange-reported net per instrument (ground truth)
   pnlHistory: PnlPoint[];                   // time-series for chart, rolling 500
   account: AccountSnapshot | null;          // latest exchange account snapshot
@@ -492,9 +492,12 @@ export function pipelineReducer(
       // disappear — that's exactly the snapshot semantics we want.
       const rows = action.payload.positions;
       const venueNet = action.payload.venueNet;
+      // Key by (strategy, instrument) — multiple strategies routinely hold the
+      // same instrument, so keying by instrument alone would let each row clobber
+      // the previous and collapse the panel to a single strategy.
       const updatedPositions: Record<string, PositionRow> = {};
       for (const row of rows) {
-        updatedPositions[row.instrument] = row;
+        updatedPositions[`${row.strategy_id}:${row.instrument}`] = row;
       }
 
       // One position event per row in the snapshot (per instrument that moved).
