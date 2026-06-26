@@ -117,6 +117,15 @@ class RiskEngine:
     def kill_switch(self) -> KillSwitch:
         return self._kill_switch
 
+    async def engage_kill_switch(self, *, triggered_by: str, reason: str) -> None:
+        """Operator-facing manual trip.
+
+        Goes through the same path as a rule-driven KILL so the
+        ``KillSwitchEvent`` is published — that is what makes the OMS cancel
+        resting orders and the dashboard reflect the halt. Idempotent.
+        """
+        await self._engage_kill_switch(triggered_by=triggered_by, reason=reason)
+
     # --- Lifecycle --------------------------------------------------------
 
     async def start(self) -> None:

@@ -52,6 +52,7 @@ from ..core.events import (
     EventId,
     ExecutionRoutedEvent,
     FillEvent,
+    KillSwitchEvent,
     OpenOrderDetail,
     OpenOrdersSnapshotEvent,
     OrderAcknowledged,
@@ -207,6 +208,10 @@ class OMSEngine:
         await self._bus.subscribe(Topic.FILLS, self._on_fill)
         # Cache marks for router sizing. Handler is cheap (one dict write).
         await self._bus.subscribe(Topic.MARKET_DATA, self._on_market_data)
+        # The kill switch latches system-wide. When it fires we must actively
+        # pull every resting order — the risk engine stops *new* orders, but
+        # quotes already on the book are abandoned risk until cancelled.
+        await self._bus.subscribe(Topic.ALERTS, self._on_alert)
         self._driver_task = asyncio.create_task(
             self._algo_driver(), name="oms-algo-driver"
         )
@@ -228,6 +233,18 @@ class OMSEngine:
             return
         self._evict_stale_signals()
         self._signal_cache[event.event_id] = (event, self._clock.now_ns())
+
+    async def _on_alert(self, event: BaseEvent) -> None:
+        # The kill switch is the only alert the OMS acts on. Everything else on
+        # this topic (risk warnings, info) is for operators/dashboard, not us.
+        if not isinstance(event, KillSwitchEvent):
+            return
+        _log.error(
+            "kill_switch_engaged_cancelling_all_resting",
+            triggered_by=event.triggered_by,
+            reason=event.reason,
+        )
+        await self._cancel_all_resting(why="kill_switch")
 
     async def _on_risk_decision(self, event: BaseEvent) -> None:
         if not isinstance(event, RiskDecision):
@@ -892,6 +909,24 @@ class OMSEngine:
                 and not order.is_terminal
             ):
                 await self._safe_cancel(order.order_id, why="risk_blocked")
+
+    async def _cancel_all_resting(self, *, why: str) -> None:
+        """Cancel every non-terminal order across all strategies/instruments.
+
+        The kill switch's cleanup arm. Unlike :meth:`_cancel_resting` (scoped to
+        one strategy+instrument and to plain orders), this pulls *everything*,
+        including execution-algo children, because a system-wide halt means no
+        order should remain live. Active algos are torn down first so the driver
+        loop does not re-emit fresh slices against orders we are cancelling.
+        """
+        for leg_id in list(self._algos):
+            self._retire_algo(leg_id)
+        cancelled = 0
+        for order in list(self._orders.values()):
+            if not order.is_terminal:
+                await self._safe_cancel(order.order_id, why=why)
+                cancelled += 1
+        _log.warning("cancel_all_resting_complete", reason=why, count=cancelled)
 
     async def _safe_cancel(self, order_id: OrderId, *, why: str) -> None:
         """Cancel an order, tolerating the race where it terminalized first."""

@@ -170,3 +170,107 @@ def test_retire_algo_removes_state() -> None:
     assert "leg-1" not in oms._algos
     assert "leg-1" not in oms._algo_ctx
     assert algo.is_done()  # cancel() makes it done
+
+
+# --- kill switch → cancel-all -----------------------------------------------
+
+
+class _CapturingBus(_NullBus):
+    """Bus that records every published (topic, event) pair."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, object]] = []
+
+    async def publish(self, topic, event):
+        self.published.append((topic, event))
+
+
+def _oms_with_bus(bus) -> OMSEngine:
+    return OMSEngine(bus=bus, clock=LiveClock())
+
+
+def _make_resting_order(*, leg_id: str | None = None) -> Order:
+    """An order acked by the venue and resting on the book — the state the
+    kill switch must be able to cancel. (A fresh order is PENDING_NEW, which
+    cannot transition straight to PENDING_CANCEL.)"""
+    o = _make_order(leg_id=leg_id)
+    o.transition_to(OrderStatus.ACKNOWLEDGED, at_ns=0)
+    return o
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_cancels_all_resting_orders() -> None:
+    from trading.core.events import CancelRequest, KillSwitchEvent
+
+    bus = _CapturingBus()
+    oms = _oms_with_bus(bus)
+
+    live_a = _make_resting_order()
+    live_b = _make_resting_order()
+    done = _make_order(terminal=True)
+    for o in (live_a, live_b, done):
+        oms._orders[o.order_id] = o
+
+    await oms._on_alert(
+        KillSwitchEvent(
+            ts_event=0, ts_ingest=0, source="risk_engine",
+            triggered_by="daily_loss_limit", reason="loss > limit",
+        )
+    )
+
+    cancels = [e for _, e in bus.published if isinstance(e, CancelRequest)]
+    cancelled_ids = {c.order_id for c in cancels}
+    assert cancelled_ids == {live_a.order_id, live_b.order_id}
+    assert live_a.status == OrderStatus.PENDING_CANCEL
+    assert live_b.status == OrderStatus.PENDING_CANCEL
+    # The terminal order is left untouched.
+    assert done.status == OrderStatus.FILLED
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_cancels_algo_children_and_retires_algos() -> None:
+    from trading.core.events import CancelRequest, KillSwitchEvent
+    from trading.oms.execution_algos import TWAPAlgo
+
+    bus = _CapturingBus()
+    oms = _oms_with_bus(bus)
+
+    algo = TWAPAlgo(quantity=Decimal("1"), duration_seconds=60, num_slices=5, start_ns=0)
+    oms._algos["leg-1"] = algo
+    oms._algo_ctx["leg-1"] = (None, None)
+    child = _make_resting_order(leg_id="leg-1")
+    oms._orders[child.order_id] = child
+
+    await oms._on_alert(
+        KillSwitchEvent(
+            ts_event=0, ts_ingest=0, source="risk_engine",
+            triggered_by="vpin_circuit_breaker", reason="toxic flow",
+        )
+    )
+
+    cancels = [e for _, e in bus.published if isinstance(e, CancelRequest)]
+    assert {c.order_id for c in cancels} == {child.order_id}
+    assert child.status == OrderStatus.PENDING_CANCEL
+    assert "leg-1" not in oms._algos
+    assert algo.is_done()
+
+
+@pytest.mark.asyncio
+async def test_on_alert_ignores_non_kill_switch_events() -> None:
+    from trading.core.events import CancelRequest, RiskAlertEvent
+    from trading.core.types import Severity
+
+    bus = _CapturingBus()
+    oms = _oms_with_bus(bus)
+    live = _make_order()
+    oms._orders[live.order_id] = live
+
+    await oms._on_alert(
+        RiskAlertEvent(
+            ts_event=0, ts_ingest=0, source="risk_engine",
+            rule_name="drawdown", severity=Severity.WARN, message="soft warn",
+        )
+    )
+
+    assert not [e for _, e in bus.published if isinstance(e, CancelRequest)]
+    assert live.status != OrderStatus.PENDING_CANCEL

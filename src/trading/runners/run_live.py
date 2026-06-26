@@ -62,6 +62,8 @@ async def _amain(args: argparse.Namespace) -> int:
         app.dashboard_server = DashboardServer(
             bus=app.bus,
             port=args.dashboard_port,
+            position_engine=app.position_engine,
+            risk_engine=app.risk_engine,
         )
 
     await app.start()

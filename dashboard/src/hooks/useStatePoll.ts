@@ -16,13 +16,23 @@ import { PipelineAction } from "../store/pipelineStore";
 
 // VITE_API_BASE lets a non-localhost deploy point the dashboard at a
 // different host/port without rebuilding. Falls back to localhost for dev.
-const HTTP_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8765";
+export const HTTP_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8765";
 
 const POSITIONS_INTERVAL_MS   = 2_000;
 const ACCOUNT_INTERVAL_MS     = 5_000;
 const OPEN_ORDERS_INTERVAL_MS = 2_000;
 const ANALYTICS_INTERVAL_MS   = 500;
 const LATENCY_INTERVAL_MS     = 1_000;
+const KILLSWITCH_INTERVAL_MS  = 3_000;
+
+interface KillSwitchResponse {
+  timestamp: string;
+  available: boolean;
+  engaged: boolean;
+  triggered_by?: string;
+  reason?: string;
+  triggered_at_ns?: number;
+}
 
 interface PositionsResponse {
   timestamp: string;
@@ -92,6 +102,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
     let openOrdersTimer: ReturnType<typeof setTimeout> | null = null;
     let analyticsTimer:  ReturnType<typeof setTimeout> | null = null;
     let latencyTimer:    ReturnType<typeof setTimeout> | null = null;
+    let killSwitchTimer: ReturnType<typeof setTimeout> | null = null;
 
     const tickPositions = async () => {
       const data = await fetchJSON<PositionsResponse>("/state/positions", ctrl.signal);
@@ -249,12 +260,32 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       }
     };
 
+    const tickKillSwitch = async () => {
+      const data = await fetchJSON<KillSwitchResponse>("/state/killswitch", ctrl.signal);
+      if (data && !ctrl.signal.aborted) {
+        dispatch({
+          type: "KILL_SWITCH_SNAPSHOT",
+          payload: {
+            available: data.available,
+            engaged: data.engaged,
+            triggered_by: data.triggered_by ?? "",
+            reason: data.reason ?? "",
+            ts: data.triggered_at_ns ? data.triggered_at_ns / 1_000_000 : null,  // ns -> ms
+          },
+        });
+      }
+      if (!ctrl.signal.aborted) {
+        killSwitchTimer = setTimeout(tickKillSwitch, KILLSWITCH_INTERVAL_MS);
+      }
+    };
+
     // Kick all polls immediately so the panels populate on first paint.
     tickPositions();
     tickAccount();
     tickOpenOrders();
     tickAnalytics();
     tickLatency();
+    tickKillSwitch();
 
     return () => {
       ctrl.abort();
@@ -263,6 +294,7 @@ export function useStatePoll(dispatch: React.Dispatch<PipelineAction>): void {
       if (openOrdersTimer) clearTimeout(openOrdersTimer);
       if (analyticsTimer)  clearTimeout(analyticsTimer);
       if (latencyTimer)    clearTimeout(latencyTimer);
+      if (killSwitchTimer) clearTimeout(killSwitchTimer);
     };
   }, [dispatch]);
 }

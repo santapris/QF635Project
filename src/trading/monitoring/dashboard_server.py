@@ -2,13 +2,18 @@
 
 Two channels with distinct semantics:
 
-- ``GET  /state/positions`` and ``GET /state/account`` are *snapshot*
-  endpoints. They return the current state-of-the-world (open positions,
-  exchange-reported balances) by reading directly from the
-  :class:`~trading.position.engine.PositionEngine` and from the latest
+- ``GET  /state/positions``, ``GET /state/account`` and
+  ``GET /state/killswitch`` are *snapshot* endpoints. They return the
+  current state-of-the-world (open positions, exchange-reported balances,
+  kill-switch latch) by reading directly from the
+  :class:`~trading.position.engine.PositionEngine` /
+  :class:`~trading.risk.engine.RiskEngine` and from the latest
   :class:`AccountSnapshotEvent` cached locally. The frontend fetches
   these on mount and polls them periodically — works regardless of
   whether the user opens the dashboard before or after pipeline start.
+- ``POST /command/killswitch/reset`` is the one *control* endpoint: it
+  re-arms the latched kill switch. The reset is marshalled onto the
+  trading loop so the engine stays the sole mutator of switch state.
 - ``WS /ws`` is the *event stream*. It carries activity events (ticks,
   trades, signals, risk decisions, orders, fills, alerts) and log
   records. Clients see only events that fire while connected. No
@@ -65,6 +70,7 @@ from ..event_bus.base import AbstractEventBus, Topic
 
 if TYPE_CHECKING:
     from ..position.engine import PositionEngine
+    from ..risk.engine import RiskEngine
     from .latency import LatencyCollector
 
 _log = structlog.get_logger(__name__)
@@ -175,6 +181,11 @@ class DashboardServer:
         Optional reference to the running :class:`PositionEngine`. When
         present, ``GET /state/positions`` reads live state directly from
         the engine; otherwise the endpoint returns an empty list.
+    risk_engine:
+        Optional reference to the running :class:`RiskEngine`. When present,
+        ``GET /state/killswitch`` reads the live latch state and
+        ``POST /command/killswitch/reset`` re-arms the switch. Absent → those
+        endpoints report/​return 503.
     """
 
     def __init__(
@@ -185,12 +196,19 @@ class DashboardServer:
         host: str = "0.0.0.0",
         position_engine: "PositionEngine | None" = None,
         latency_collector: "LatencyCollector | None" = None,
+        risk_engine: "RiskEngine | None" = None,
     ) -> None:
         self._bus = bus
         self._port = port
         self._host = host
         self._position_engine = position_engine
         self._latency_collector = latency_collector
+        self._risk_engine = risk_engine
+        # The trading event loop, captured on start(). The uvicorn server runs
+        # on its own thread/loop; any write into engine state (kill-switch
+        # reset) must be marshalled back onto *this* loop, where the engine
+        # mutates its own state, rather than touched from the HTTP thread.
+        self._trading_loop: asyncio.AbstractEventLoop | None = None
         self._clients: MutableSet[Any] = set()
         self._broadcast_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10_000)
         self._broadcaster_task: asyncio.Task[None] | None = None
@@ -237,6 +255,9 @@ class DashboardServer:
             return
 
         self._main_loop = asyncio.get_event_loop()
+        # Capture the trading loop so HTTP handlers (on the uvicorn thread)
+        # can marshal engine writes back here. start() runs on the trading loop.
+        self._trading_loop = asyncio.get_running_loop()
 
         # Subscribe to streaming topics for the WS broadcast.
         for topic in _STREAM_TOPICS:
@@ -369,6 +390,49 @@ class DashboardServer:
             ],
         }
     
+    def _killswitch_payload(self) -> dict[str, Any]:
+        """Current latch state. ``available`` is False when no engine is wired
+        (the tab then shows an inert/unknown state rather than a false ARMED)."""
+        engine = self._risk_engine
+        if engine is None:
+            return {"timestamp": _now_iso(), "available": False, "engaged": False}
+        state = engine.kill_switch.state
+        return {
+            "timestamp": _now_iso(),
+            "available": True,
+            "engaged": state.engaged,
+            "triggered_by": state.triggered_by,
+            "reason": state.reason,
+            "triggered_at_ns": state.triggered_at_ns,
+        }
+
+    async def _engage_killswitch(self, *, triggered_by: str, reason: str) -> dict[str, Any]:
+        """Manually trip the switch on the trading loop and return fresh state.
+
+        Routes through the engine (not kill_switch.engage directly) so the
+        KillSwitchEvent is published — that drives the OMS cancel-all and the
+        live dashboard update.
+        """
+        engine = self._risk_engine
+        if engine is None:
+            raise RuntimeError("no risk engine wired")
+        await engine.engage_kill_switch(triggered_by=triggered_by, reason=reason)
+        return self._killswitch_payload()
+
+    async def _reset_killswitch(self) -> dict[str, Any]:
+        """Re-arm the switch on the trading loop and return the fresh state.
+
+        Marshalled from the HTTP thread onto the trading loop via
+        run_coroutine_threadsafe so the engine remains the sole mutator of its
+        own kill-switch state (matching the 'writes via engine only' invariant).
+        """
+        engine = self._risk_engine
+        if engine is None:
+            raise RuntimeError("no risk engine wired")
+        engine.kill_switch.reset()
+        _log.warning("kill_switch_reset_via_dashboard")
+        return self._killswitch_payload()
+
     def _analytics_payload(self) -> dict[str, Any]:
         m = self._latest_microstructure
         d = self._latest_diagnostics
@@ -518,6 +582,40 @@ class DashboardServer:
         async def latency_endpoint(request: Request) -> JSONResponse:
             return JSONResponse(self._latency_payload())
 
+        async def killswitch_endpoint(request: Request) -> JSONResponse:
+            return JSONResponse(self._killswitch_payload())
+
+        async def killswitch_engage_endpoint(request: Request) -> JSONResponse:
+            if self._risk_engine is None or self._trading_loop is None:
+                return JSONResponse(
+                    {"error": "kill switch control unavailable"}, status_code=503
+                )
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+            triggered_by = str(body.get("triggered_by") or "operator")
+            reason = str(body.get("reason") or "manual engage via dashboard")
+            fut = asyncio.run_coroutine_threadsafe(
+                self._engage_killswitch(triggered_by=triggered_by, reason=reason),
+                self._trading_loop,
+            )
+            payload = await asyncio.wrap_future(fut)
+            return JSONResponse(payload)
+
+        async def killswitch_reset_endpoint(request: Request) -> JSONResponse:
+            if self._risk_engine is None or self._trading_loop is None:
+                return JSONResponse(
+                    {"error": "kill switch control unavailable"}, status_code=503
+                )
+            # We are on the uvicorn thread; the reset must run on the trading
+            # loop. Schedule it there and await the result from this thread.
+            fut = asyncio.run_coroutine_threadsafe(
+                self._reset_killswitch(), self._trading_loop
+            )
+            payload = await asyncio.wrap_future(fut)
+            return JSONResponse(payload)
+
         async def websocket_endpoint(ws: WebSocket) -> None:
             await ws.accept()
             clients.add(ws)
@@ -555,6 +653,17 @@ class DashboardServer:
                 Route("/backtest/run", backtest_run_endpoint, methods=["POST"]),
                 Route("/backtest/result", backtest_result_endpoint, methods=["GET"]),
                 Route("/state/latency", latency_endpoint, methods=["GET"]),
+                Route("/state/killswitch", killswitch_endpoint, methods=["GET"]),
+                Route(
+                    "/command/killswitch/engage",
+                    killswitch_engage_endpoint,
+                    methods=["POST"],
+                ),
+                Route(
+                    "/command/killswitch/reset",
+                    killswitch_reset_endpoint,
+                    methods=["POST"],
+                ),
                 WebSocketRoute("/ws", websocket_endpoint),
             ],
             middleware=middleware,
