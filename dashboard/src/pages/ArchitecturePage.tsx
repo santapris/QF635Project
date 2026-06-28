@@ -431,6 +431,19 @@ function ArchitectureGraph({ state }: { state: PipelineState }) {
           border: `1px solid ${theme.palette.divider}`,
           "--rf-edge-idle": theme.palette.mode === "dark" ? "#6b6b6b" : "#9aa0a6",
           ".react-flow__attribution": { display: "none" },
+          ...(theme.palette.mode === "dark" && {
+            ".react-flow__controls-button": {
+              backgroundColor: theme.palette.background.paper,
+              borderBottom: `1px solid ${theme.palette.divider}`,
+              fill: theme.palette.text.primary,
+              "&:hover": {
+                backgroundColor: theme.palette.action.hover,
+              },
+              "& svg": {
+                fill: theme.palette.text.primary,
+              },
+            },
+          }),
         }}
       >
         <ReactFlow
